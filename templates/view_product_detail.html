@@ -3,7 +3,7 @@
 
 <div class="d-flex flex-wrap justify-content-between align-items-end gap-2 mb-3">
   <div>
-    <div class="text-muted small">등록용</div>
+    <div class="text-muted small">조회용</div>
     <h4 class="mb-1">{{ product['item_name'] or '-' }}</h4>
     <div class="text-muted">
       상품코드: <span class="fw-semibold mono">{{ product['item_code'] }}</span> |
@@ -12,21 +12,8 @@
   </div>
 
   <div class="d-flex gap-2">
-    <a class="btn btn-outline-secondary" href="{{ url_for('register_home') }}">← 목록</a>
+    <a class="btn btn-outline-secondary" href="{{ url_for('view_products') }}">← 목록</a>
   </div>
-</div>
-
-<div class="card p-3 shadow-soft mb-4">
-  <form method="post" enctype="multipart/form-data">
-    <div class="mb-2 fw-semibold">사진 업로드</div>
-    <div class="input-group">
-      <input type="file" class="form-control" name="photos" multiple accept="image/*" required>
-      <button class="btn btn-primary" type="submit">업로드</button>
-    </div>
-    <div class="form-text">
-      여러 장 선택 가능 · JPG/PNG/WebP 지원 · 자동 압축 저장(S3)
-    </div>
-  </form>
 </div>
 
 <div class="row g-3">
@@ -38,11 +25,6 @@
       </a>
       <div class="card-body p-2">
         <div class="small text-muted text-truncate">{{ ph['filename'] }}</div>
-        <form method="post"
-              action="{{ url_for('register_delete_photo', photo_id=ph['id']) }}"
-              onsubmit="return confirm('이 사진을 삭제하시겠습니까?');">
-          <button class="btn btn-sm btn-outline-danger w-100 mt-1">삭제</button>
-        </form>
       </div>
     </div>
   </div>
@@ -52,7 +34,7 @@
   <div class="col-12">
     <div class="card p-5 text-center shadow-soft">
       <div class="fw-semibold mb-1">등록된 사진이 없습니다</div>
-      <div class="text-muted">위에서 사진을 업로드해 주세요.</div>
+      <div class="text-muted">등록용 화면에서 사진을 업로드하면 조회용에서도 보입니다.</div>
     </div>
   </div>
   {% endif %}

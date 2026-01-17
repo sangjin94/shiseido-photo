@@ -10,7 +10,7 @@
 
   <style>
     body { background: #f6f7fb; }
-    .app-navbar { backdrop-filter: blur(8px); background: rgba(255,255,255,0.9); border-bottom: 1px solid rgba(0,0,0,.06); }
+    .app-navbar { backdrop-filter: blur(8px); background: rgba(255,255,255,0.92); border-bottom: 1px solid rgba(0,0,0,.06); }
     .brand-badge { font-size: .75rem; color: #6c757d; }
     .card { border: 1px solid rgba(0,0,0,.06); border-radius: 14px; }
     .shadow-soft { box-shadow: 0 8px 24px rgba(0,0,0,.06); }
@@ -35,9 +35,10 @@
         <ul class="navbar-nav me-auto mb-2 mb-lg-0">
           {% if session.get('auth_view') or session.get('auth_edit') %}
           <li class="nav-item">
-              <a class="nav-link" href="{{ url_for('view_products') }}">조회용</a>
+            <a class="nav-link" href="{{ url_for('view_products') }}">조회용</a>
           </li>
           {% endif %}
+
           {% if session.get('auth_edit') %}
           <li class="nav-item">
             <a class="nav-link" href="{{ url_for('register_home') }}">등록용</a>
