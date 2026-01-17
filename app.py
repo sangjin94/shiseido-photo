@@ -4,11 +4,13 @@ import sqlite3
 import argparse
 from datetime import datetime
 from pathlib import Path
+from functools import wraps
 
 import pandas as pd
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    flash, abort, jsonify, send_from_directory
+    flash, abort, jsonify, send_from_directory, send_file,
+    session
 )
 
 from PIL import Image, ImageOps, ImageEnhance, ImageFilter
@@ -46,10 +48,20 @@ MAX_CONTENT_LENGTH = int(os.environ.get("MAX_CONTENT_LENGTH", str(20 * 1024 * 10
 # ✅ 관리자 삭제 토큰(선택) - 설정하면 /admin/purge_photos 사용 가능
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "").strip()
 
+# ✅ 모드별 암호키 (필수)
+VIEW_PASSWORD = os.environ.get("VIEW_PASSWORD", "").strip()   # 조회용
+EDIT_PASSWORD = os.environ.get("EDIT_PASSWORD", "").strip()   # 등록용
+
 if not all([S3_BUCKET, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]):
     raise SystemExit(
         "필수 환경변수 누락: S3_BUCKET, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY\n"
         "서버 배포 시에도 환경변수로 반드시 설정하세요."
+    )
+
+if not VIEW_PASSWORD or not EDIT_PASSWORD:
+    raise SystemExit(
+        "필수 환경변수 누락: VIEW_PASSWORD, EDIT_PASSWORD\n"
+        "조회/등록 화면 진입용 암호키를 환경변수로 설정하세요."
     )
 
 s3 = boto3.client(
@@ -80,6 +92,69 @@ app.secret_key = FLASK_SECRET_KEY
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# =========================
+# ✅ 인증(조회/등록 모드)
+# =========================
+def require_view_auth(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if session.get("auth_view") is True or session.get("auth_edit") is True:
+            return fn(*args, **kwargs)
+        return redirect(url_for("auth_view", next=request.path))
+    return wrapper
+
+
+def require_edit_auth(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if session.get("auth_edit") is True:
+            return fn(*args, **kwargs)
+        return redirect(url_for("auth_edit", next=request.path))
+    return wrapper
+
+
+@app.route("/", methods=["GET"])
+def gate_index():
+    # 첫 화면: 조회용 / 등록용 선택
+    return render_template("gate_index.html")
+
+
+@app.route("/auth/view", methods=["GET", "POST"])
+def auth_view():
+    next_url = request.args.get("next", "") or url_for("view_products_with_photos")
+    if request.method == "POST":
+        pw = (request.form.get("password", "") or "").strip()
+        if pw == VIEW_PASSWORD:
+            session["auth_view"] = True
+            # 조회 권한만 부여 (등록은 False 유지)
+            session.pop("auth_edit", None)
+            return redirect(next_url)
+        flash("조회용 암호키가 올바르지 않습니다.", "danger")
+    return render_template("auth.html", mode="view", title="조회용 화면", next_url=next_url)
+
+
+@app.route("/auth/edit", methods=["GET", "POST"])
+def auth_edit():
+    next_url = request.args.get("next", "") or url_for("register_home")
+    if request.method == "POST":
+        pw = (request.form.get("password", "") or "").strip()
+        if pw == EDIT_PASSWORD:
+            session["auth_edit"] = True
+            # 등록 권한이면 조회도 허용
+            session["auth_view"] = True
+            return redirect(next_url)
+        flash("등록용 암호키가 올바르지 않습니다.", "danger")
+    return render_template("auth.html", mode="edit", title="등록용 화면", next_url=next_url)
+
+
+@app.route("/logout", methods=["GET"])
+def logout():
+    session.pop("auth_view", None)
+    session.pop("auth_edit", None)
+    flash("로그아웃 완료", "success")
+    return redirect(url_for("gate_index"))
 
 
 # =========================
@@ -223,14 +298,8 @@ def presigned_get_url(key: str, expires_sec: int = None) -> str:
 
 
 # =========================
-# DB 초기화 + 마이그레이션
+# DB 초기화
 # =========================
-def _column_exists(cur, table: str, column: str) -> bool:
-    cur.execute(f"PRAGMA table_info({table})")
-    cols = [r[1] for r in cur.fetchall()]
-    return column in cols
-
-
 def init_db():
     conn = get_db()
     cur = conn.cursor()
@@ -325,135 +394,10 @@ def purge_all_photos(delete_s3_objects: bool = True):
 
 
 # =========================
-# ✅ zxing-cpp 바코드 인식(서버 API)
-# =========================
-def _variants_for_decode(img: Image.Image):
-    base = _fix_exif_orientation(img)
-    if base.mode != "RGB":
-        base = base.convert("RGB")
-
-    base.thumbnail((2400, 2400))
-
-    def crop_center(im: Image.Image, rw: float, rh: float):
-        w, h = im.size
-        cw, ch = int(w * rw), int(h * rh)
-        x0 = max(0, (w - cw) // 2)
-        y0 = max(0, (h - ch) // 2)
-        return im.crop((x0, y0, x0 + cw, y0 + ch))
-
-    def crop_bottom(im: Image.Image, rh: float):
-        w, h = im.size
-        ch = int(h * rh)
-        return im.crop((0, h - ch, w, h))
-
-    g = ImageOps.grayscale(base)
-    a = ImageOps.autocontrast(g)
-    c2 = ImageEnhance.Contrast(a).enhance(2.0)
-    c24 = ImageEnhance.Contrast(a).enhance(2.4)
-    sharp = c24.filter(ImageFilter.UnsharpMask(radius=2, percent=180, threshold=3))
-
-    variants = [
-        base, a, c2, c24, sharp,
-        crop_center(base, 0.85, 0.55),
-        crop_center(a, 0.85, 0.55),
-        crop_center(c24, 0.75, 0.45),
-        crop_bottom(base, 0.45),
-        crop_bottom(a, 0.45),
-        crop_bottom(c24, 0.45),
-        crop_bottom(sharp, 0.45),
-    ]
-    return variants
-
-
-def decode_barcode_zxing(img: Image.Image):
-    candidates = []
-    debug = []
-
-    opts = zxingcpp.ReaderOptions()
-    opts.try_harder = True
-    opts.try_rotate = True
-    opts.formats = (
-        zxingcpp.BarcodeFormat.EAN13
-        | zxingcpp.BarcodeFormat.EAN8
-        | zxingcpp.BarcodeFormat.UPCA
-        | zxingcpp.BarcodeFormat.UPCE
-        | zxingcpp.BarcodeFormat.CODE128
-        | zxingcpp.BarcodeFormat.CODE39
-    )
-
-    for i, v in enumerate(_variants_for_decode(img), start=1):
-        if v.mode not in ("RGB", "L"):
-            v = v.convert("RGB")
-
-        try:
-            results = zxingcpp.read_barcodes(v, opts)
-        except Exception as e:
-            debug.append(f"variant#{i}: exception={e}")
-            continue
-
-        debug.append(f"variant#{i}: results={len(results)}")
-        for r in results:
-            txt = (r.text or "").strip()
-            if txt:
-                d = re.sub(r"\D", "", txt)
-                if d:
-                    candidates.append(d)
-
-        if candidates:
-            break
-
-    def score(s: str):
-        if len(s) == 13:
-            return 100
-        if len(s) == 12:
-            return 90
-        if 8 <= len(s) <= 14:
-            return 80
-        return 10
-
-    uniq = sorted(set(candidates), key=score, reverse=True)
-    best = uniq[0] if uniq else None
-    return best, uniq, debug
-
-
-@app.route("/api/decode_barcode", methods=["POST"])
-def api_decode_barcode():
-    if "image" not in request.files:
-        return jsonify({"ok": False, "error": "no_file"}), 400
-
-    f = request.files["image"]
-    if not f or not f.filename:
-        return jsonify({"ok": False, "error": "empty_file"}), 400
-
-    try:
-        img = Image.open(f.stream)
-    except Exception:
-        return jsonify({"ok": False, "error": "cannot_open_image"}), 400
-
-    best, candidates, debug = decode_barcode_zxing(img)
-
-    if not best:
-        return jsonify({
-            "ok": False,
-            "code": None,
-            "candidates": candidates,
-            "error": "not_detected",
-            "debug": debug[-6:],
-        }), 200
-
-    return jsonify({
-        "ok": True,
-        "code": best,
-        "candidates": candidates,
-        "error": None,
-        "debug": debug[-6:],
-    }), 200
-
-
-# =========================
 # ✅ Presigned URL 새로고침 API (자동 갱신용)
 # =========================
 @app.get("/api/presign/photos")
+@require_view_auth
 def api_presign_photos():
     item_code = normalize_code(request.args.get("item_code", ""))
     if not item_code:
@@ -488,6 +432,7 @@ def api_presign_photos():
 # ✅ 관리자 전체 삭제 엔드포인트(선택)
 # =========================
 @app.get("/admin/purge_photos")
+@require_edit_auth
 def admin_purge_photos():
     if not ADMIN_TOKEN:
         return jsonify({"ok": False, "error": "ADMIN_TOKEN_not_set"}), 403
@@ -504,10 +449,10 @@ def admin_purge_photos():
 
 
 # =========================
-# ✅ 템플릿 호환용 라우트 (중요)
-# - product_detail.html 이 url_for('uploaded_file', item_code=..., filename=...) 를 사용해도 500 안 나게 함
+# ✅ 템플릿 호환용 업로드 라우트
 # =========================
 @app.route("/uploads/<item_code>/<path:filename>")
+@require_view_auth
 def uploaded_file(item_code, filename):
     """
     템플릿 호환용:
@@ -535,16 +480,122 @@ def uploaded_file(item_code, filename):
     if s3_key:
         return redirect(presigned_get_url(s3_key, expires_sec=PRESIGNED_EXPIRES))
 
-    # 로컬 폴백(혹시 로컬에 파일을 저장하는 구조를 병행할 경우 대비)
     uploads_dir = BASE_DIR / "static" / "uploads" / item_code
     return send_from_directory(str(uploads_dir), filename)
 
 
 # =========================
-# 라우트
+# ✅ 조회용 화면: 사진 등록 상품 리스트 + 엑셀
 # =========================
-@app.route("/", methods=["GET"])
-def home():
+@app.route("/view/products/photos", methods=["GET"])
+@require_view_auth
+def view_products_with_photos():
+    q = normalize_code(request.args.get("q", ""))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    base_sql = """
+        SELECT
+            p.item_code,
+            p.item_name,
+            p.scan_code,
+            COUNT(ph.id) AS photo_count
+        FROM products p
+        JOIN photos ph
+          ON ph.product_item_code = p.item_code
+    """
+
+    if q:
+        like = f"%{q}%"
+        sql = base_sql + """
+        WHERE p.item_code LIKE ?
+           OR p.scan_code LIKE ?
+           OR p.item_name LIKE ?
+        GROUP BY p.item_code, p.item_name, p.scan_code
+        ORDER BY photo_count DESC, p.item_code
+        LIMIT 2000
+        """
+        cur.execute(sql, (like, like, like))
+    else:
+        sql = base_sql + """
+        GROUP BY p.item_code, p.item_name, p.scan_code
+        ORDER BY photo_count DESC, p.item_code
+        LIMIT 2000
+        """
+        cur.execute(sql)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return render_template("products_with_photos.html", rows=rows, q=q)
+
+
+@app.route("/view/export/products_with_photos.xlsx", methods=["GET"])
+@require_view_auth
+def view_export_products_with_photos_xlsx():
+    q = normalize_code(request.args.get("q", ""))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    base_sql = """
+        SELECT
+            p.item_name AS 상품명,
+            p.item_code AS 상품코드,
+            p.scan_code AS 스캔바코드,
+            COUNT(ph.id) AS 사진수
+        FROM products p
+        JOIN photos ph
+          ON ph.product_item_code = p.item_code
+    """
+
+    params = ()
+    if q:
+        like = f"%{q}%"
+        sql = base_sql + """
+        WHERE p.item_code LIKE ?
+           OR p.scan_code LIKE ?
+           OR p.item_name LIKE ?
+        GROUP BY p.item_name, p.item_code, p.scan_code
+        ORDER BY 사진수 DESC, 상품코드
+        """
+        params = (like, like, like)
+    else:
+        sql = base_sql + """
+        GROUP BY p.item_name, p.item_code, p.scan_code
+        ORDER BY 사진수 DESC, 상품코드
+        """
+
+    cur.execute(sql, params)
+    data = cur.fetchall()
+    conn.close()
+
+    df = pd.DataFrame([dict(r) for r in data])
+
+    import io
+    bio = io.BytesIO()
+    with pd.ExcelWriter(bio, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="사진등록상품")
+    bio.seek(0)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"사진등록상품리스트_{ts}.xlsx"
+
+    return send_file(
+        bio,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+
+# =========================
+# ✅ 등록용 화면: 기존 홈/상품 상세를 /register 로 이동
+# =========================
+@app.route("/register", methods=["GET"])
+@require_edit_auth
+def register_home():
     q = normalize_code(request.args.get("q", ""))
 
     conn = get_db()
@@ -585,8 +636,9 @@ def home():
     return render_template("home.html", products=products, q=q)
 
 
-@app.route("/product/<item_code>", methods=["GET", "POST"])
-def product_detail(item_code):
+@app.route("/register/product/<item_code>", methods=["GET", "POST"])
+@require_edit_auth
+def register_product_detail(item_code):
     item_code = normalize_code(item_code)
     if not item_code:
         abort(404)
@@ -599,17 +651,17 @@ def product_detail(item_code):
     if not product:
         conn.close()
         flash("해당 상품을 찾을 수 없습니다. (마스터에 없는 상품코드)", "warning")
-        return redirect(url_for("home"))
+        return redirect(url_for("register_home"))
 
     if request.method == "POST":
         if "photos" not in request.files:
             flash("업로드할 파일이 없습니다. (폼 enctype='multipart/form-data' 확인)", "danger")
-            return redirect(url_for("product_detail", item_code=item_code))
+            return redirect(url_for("register_product_detail", item_code=item_code))
 
         files = request.files.getlist("photos")
         if not files or all(not f.filename for f in files):
             flash("파일을 선택해 주세요.", "warning")
-            return redirect(url_for("product_detail", item_code=item_code))
+            return redirect(url_for("register_product_detail", item_code=item_code))
 
         saved_count = 0
         fail_count = 0
@@ -642,7 +694,7 @@ def product_detail(item_code):
         conn.commit()
         flash(f"사진 업로드: 성공 {saved_count} / 실패 {fail_count} (S3 저장)", "success" if saved_count else "warning")
         conn.close()
-        return redirect(url_for("product_detail", item_code=item_code))
+        return redirect(url_for("register_product_detail", item_code=item_code))
 
     # GET: 사진 목록 + presigned
     cur.execute(
@@ -667,14 +719,15 @@ def product_detail(item_code):
         "product_detail.html",
         product=product,
         photos=photos,
-        item_code=item_code,  # ✅ 템플릿/JS에서 편하게 사용
+        item_code=item_code,
         presigned_expires=PRESIGNED_EXPIRES,
         presigned_refresh_margin=PRESIGNED_REFRESH_MARGIN,
     )
 
 
-@app.route("/photo/<int:photo_id>/delete", methods=["POST"])
-def delete_photo(photo_id: int):
+@app.route("/register/photo/<int:photo_id>/delete", methods=["POST"])
+@require_edit_auth
+def register_delete_photo(photo_id: int):
     conn = get_db()
     cur = conn.cursor()
 
@@ -695,9 +748,12 @@ def delete_photo(photo_id: int):
     s3_delete(key)
 
     flash("사진 삭제 완료", "success")
-    return redirect(url_for("product_detail", item_code=item_code))
+    return redirect(url_for("register_product_detail", item_code=item_code))
 
 
+# =========================
+# 부트스트랩
+# =========================
 def bootstrap():
     ensure_dirs()
     init_db()
