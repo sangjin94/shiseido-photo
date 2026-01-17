@@ -4,55 +4,110 @@
 <div class="d-flex flex-wrap align-items-end justify-content-between gap-2 mb-3">
   <div>
     <div class="text-muted small">조회용</div>
-    <h4 class="mb-1">사진 등록된 상품 리스트</h4>
-    <div class="text-muted">상품명 / 상품코드 / 바코드로 검색하고 엑셀로 다운로드할 수 있습니다.</div>
+    <h4 class="mb-1">상품 리스트</h4>
+    <div class="text-muted">전체 상품을 조회합니다. (등록/미등록 표시)</div>
   </div>
 
   <div class="d-flex gap-2">
-    <a class="btn btn-primary" href="{{ url_for('view_export_products_with_photos_xlsx', q=q) }}">엑셀 다운로드</a>
+    <a class="btn btn-primary" href="{{ url_for('view_export_products_xlsx', q=q, f=f) }}">엑셀 다운로드</a>
   </div>
 </div>
 
 <div class="card p-3 shadow-soft mb-3">
-  <form method="get">
-    <div class="input-group">
-      <input type="text" class="form-control" name="q" value="{{ q }}" placeholder="상품명/상품코드/바코드 검색">
-      <button class="btn btn-outline-primary" type="submit">검색</button>
-      <a class="btn btn-outline-secondary" href="{{ url_for('view_products_with_photos') }}">초기화</a>
+  <form method="get" action="{{ url_for('view_products') }}">
+    <div class="row g-2 align-items-center">
+      <div class="col-12 col-md-7">
+        <div class="input-group">
+          <input type="text" class="form-control" name="q" value="{{ q }}" placeholder="상품명/상품코드/바코드 검색">
+          <button class="btn btn-outline-primary" type="submit">검색</button>
+          <a class="btn btn-outline-secondary" href="{{ url_for('view_products') }}">초기화</a>
+        </div>
+      </div>
+      <div class="col-12 col-md-5">
+        <select class="form-select" name="f" onchange="this.form.submit()">
+          <option value="all" {% if f=='all' %}selected{% endif %}>전체</option>
+          <option value="has" {% if f=='has' %}selected{% endif %}>사진 등록됨</option>
+          <option value="none" {% if f=='none' %}selected{% endif %}>미등록</option>
+        </select>
+      </div>
     </div>
   </form>
 </div>
 
-<div class="card shadow-soft">
-  {% if rows and rows|length > 0 %}
+<!-- ✅ 모바일 카드형 -->
+<div class="d-md-none">
+  <div class="row g-2">
+    {% for r in rows %}
+      {% set has_photo = (r['photo_count']|int > 0) %}
+      <div class="col-12">
+        <div class="card p-3 shadow-soft">
+          <div class="d-flex justify-content-between align-items-start gap-2">
+            <div>
+              <div class="fw-semibold mono">{{ r['item_code'] }}</div>
+              <div class="small {% if has_photo %}text-success{% else %}text-muted{% endif %}">
+                {% if has_photo %}(사진등록){% else %}(미등록){% endif %}
+              </div>
+              <div class="mt-1">{{ r['item_name'] or '-' }}</div>
+              <div class="text-muted small mono">{{ r['scan_code'] or '-' }}</div>
+            </div>
+            <div class="text-end">
+              {% if has_photo %}
+                <span class="badge text-bg-success">등록</span>
+              {% else %}
+                <span class="badge text-bg-secondary">미등록</span>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+
+    {% if not rows %}
+      <div class="col-12">
+        <div class="card p-5 text-center shadow-soft">
+          <div class="fw-semibold mb-1">표시할 데이터가 없습니다</div>
+          <div class="text-muted">검색/필터 조건을 바꿔보세요.</div>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ✅ 데스크탑 테이블 -->
+<div class="d-none d-md-block">
+  <div class="card shadow-soft">
     <div class="table-responsive">
       <table class="table table-hover align-middle mb-0">
         <thead>
           <tr>
-            <th style="min-width:150px;">상품코드</th>
+            <th style="min-width:160px;">상품코드</th>
             <th>상품명</th>
             <th style="min-width:180px;">스캔바코드</th>
-            <th class="text-end" style="min-width:90px;">사진수</th>
           </tr>
         </thead>
         <tbody>
           {% for r in rows %}
-          <tr>
-            <td class="fw-semibold mono">{{ r['item_code'] }}</td>
-            <td>{{ r['item_name'] or '-' }}</td>
-            <td class="mono">{{ r['scan_code'] or '-' }}</td>
-            <td class="text-end">{{ r['photo_count'] }}</td>
-          </tr>
+            {% set has_photo = (r['photo_count']|int > 0) %}
+            <tr>
+              <td>
+                <div class="fw-semibold mono">{{ r['item_code'] }}</div>
+                <div class="small {% if has_photo %}text-success{% else %}text-muted{% endif %}">
+                  {% if has_photo %}(사진등록){% else %}(미등록){% endif %}
+                </div>
+              </td>
+              <td>{{ r['item_name'] or '-' }}</td>
+              <td class="mono">{{ r['scan_code'] or '-' }}</td>
+            </tr>
           {% endfor %}
+          {% if not rows %}
+            <tr>
+              <td colspan="3" class="text-center text-muted py-4">표시할 데이터가 없습니다.</td>
+            </tr>
+          {% endif %}
         </tbody>
       </table>
     </div>
-  {% else %}
-    <div class="p-5 text-center">
-      <div class="fw-semibold mb-1">표시할 데이터가 없습니다</div>
-      <div class="text-muted">아직 사진이 등록된 상품이 없거나, 검색 조건에 해당하는 결과가 없습니다.</div>
-    </div>
-  {% endif %}
+  </div>
 </div>
 
 {% endblock %}

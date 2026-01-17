@@ -1,60 +1,96 @@
 {% extends "base.html" %}
 {% block content %}
 
-<div class="container py-3" style="max-width: 1200px;">
-  <div class="d-flex flex-wrap justify-content-between align-items-end gap-2 mb-3">
-    <div>
-      <div class="text-muted small">등록용</div>
-      <h4 class="mb-1">상품 목록</h4>
-      <div class="text-muted">상품을 선택하여 사진을 등록하거나 관리합니다.</div>
-    </div>
-
-    <div class="d-flex gap-2">
-      <a class="btn btn-outline-secondary" href="{{ url_for('logout') }}">로그아웃</a>
-    </div>
+<div class="d-flex flex-wrap justify-content-between align-items-end gap-2 mb-3">
+  <div>
+    <div class="text-muted small">등록용</div>
+    <h4 class="mb-1">상품 목록</h4>
+    <div class="text-muted">상품을 선택하여 사진을 등록하거나 관리합니다.</div>
   </div>
+</div>
 
-  <form method="get" class="mb-3">
+<div class="card p-3 shadow-soft mb-3">
+  <form method="get" action="{{ url_for('register_home') }}">
     <div class="input-group">
-      <input
-        type="text"
-        class="form-control"
-        name="q"
-        value="{{ q }}"
-        placeholder="상품명 / 상품코드 / 스캔바코드 검색"
-      >
+      <input type="text" class="form-control" name="q" value="{{ q }}" placeholder="상품명 / 상품코드 / 바코드 검색">
       <button class="btn btn-primary" type="submit">검색</button>
       <a class="btn btn-outline-secondary" href="{{ url_for('register_home') }}">초기화</a>
     </div>
   </form>
+</div>
 
-  <div class="card shadow-sm">
+<!-- ✅ 모바일 카드형 (md 미만) -->
+<div class="d-md-none">
+  <div class="row g-2">
+    {% for p in products %}
+      {% set has_photo = (p['photo_count']|int > 0) %}
+      <div class="col-12">
+        <a class="text-decoration-none" href="{{ url_for('register_product_detail', item_code=p['item_code']) }}">
+          <div class="card p-3 shadow-soft">
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <div>
+                <div class="fw-semibold mono">{{ p['item_code'] }}</div>
+                <div class="small {% if has_photo %}text-success{% else %}text-muted{% endif %}">
+                  {% if has_photo %}(사진등록){% else %}(미등록){% endif %}
+                </div>
+                <div class="mt-1">{{ p['item_name'] or '-' }}</div>
+                <div class="text-muted small mono">{{ p['scan_code'] or '-' }}</div>
+              </div>
+              <div class="text-end">
+                {% if has_photo %}
+                  <span class="badge text-bg-success">등록</span>
+                {% else %}
+                  <span class="badge text-bg-secondary">미등록</span>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </a>
+      </div>
+    {% endfor %}
+
+    {% if not products %}
+      <div class="col-12">
+        <div class="card p-5 text-center shadow-soft">
+          <div class="fw-semibold mb-1">검색 결과가 없습니다</div>
+          <div class="text-muted">다른 검색어로 다시 시도해 주세요.</div>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ✅ 데스크탑 테이블 (md 이상) -->
+<div class="d-none d-md-block">
+  <div class="card shadow-soft">
     <div class="table-responsive">
       <table class="table table-hover align-middle mb-0">
         <thead>
           <tr>
-            <th style="min-width:140px;">상품코드</th>
+            <th style="min-width:160px;">상품코드</th>
             <th>상품명</th>
-            <th style="min-width:160px;">스캔바코드</th>
-            <th class="text-end" style="min-width:90px;">사진수</th>
+            <th style="min-width:180px;">스캔바코드</th>
           </tr>
         </thead>
         <tbody>
           {% for p in products %}
-          <tr style="cursor:pointer"
-              onclick="location.href='{{ url_for('register_product_detail', item_code=p['item_code']) }}'">
-            <td class="fw-semibold">{{ p['item_code'] }}</td>
-            <td>{{ p['item_name'] or '-' }}</td>
-            <td>{{ p['scan_code'] or '-' }}</td>
-            <td class="text-end">{{ p['photo_count'] }}</td>
-          </tr>
+            {% set has_photo = (p['photo_count']|int > 0) %}
+            <tr style="cursor:pointer"
+                onclick="location.href='{{ url_for('register_product_detail', item_code=p['item_code']) }}'">
+              <td>
+                <div class="fw-semibold mono">{{ p['item_code'] }}</div>
+                <div class="small {% if has_photo %}text-success{% else %}text-muted{% endif %}">
+                  {% if has_photo %}(사진등록){% else %}(미등록){% endif %}
+                </div>
+              </td>
+              <td>{{ p['item_name'] or '-' }}</td>
+              <td class="mono">{{ p['scan_code'] or '-' }}</td>
+            </tr>
           {% endfor %}
           {% if not products %}
-          <tr>
-            <td colspan="4" class="text-center text-muted py-4">
-              검색 결과가 없습니다.
-            </td>
-          </tr>
+            <tr>
+              <td colspan="3" class="text-center text-muted py-4">검색 결과가 없습니다.</td>
+            </tr>
           {% endif %}
         </tbody>
       </table>

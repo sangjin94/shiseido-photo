@@ -124,7 +124,7 @@ def gate_index():
 
 @app.route("/auth/view", methods=["GET", "POST"])
 def auth_view():
-    next_url = request.args.get("next", "") or url_for("view_products_with_photos")
+    next_url = request.args.get("next", "") or url_for("view_products")
     if request.method == "POST":
         pw = (request.form.get("password", "") or "").strip()
         if pw == VIEW_PASSWORD:
@@ -371,6 +371,133 @@ def load_master_excel():
 
 
 # =========================
+# ✅ zxing-cpp 바코드 인식(서버 API)
+# =========================
+def _variants_for_decode(img: Image.Image):
+    base = _fix_exif_orientation(img)
+    if base.mode != "RGB":
+        base = base.convert("RGB")
+
+    base.thumbnail((2400, 2400))
+
+    def crop_center(im: Image.Image, rw: float, rh: float):
+        w, h = im.size
+        cw, ch = int(w * rw), int(h * rh)
+        x0 = max(0, (w - cw) // 2)
+        y0 = max(0, (h - ch) // 2)
+        return im.crop((x0, y0, x0 + cw, y0 + ch))
+
+    def crop_bottom(im: Image.Image, rh: float):
+        w, h = im.size
+        ch = int(h * rh)
+        return im.crop((0, h - ch, w, h))
+
+    g = ImageOps.grayscale(base)
+    a = ImageOps.autocontrast(g)
+    c2 = ImageEnhance.Contrast(a).enhance(2.0)
+    c24 = ImageEnhance.Contrast(a).enhance(2.4)
+    sharp = c24.filter(ImageFilter.UnsharpMask(radius=2, percent=180, threshold=3))
+
+    variants = [
+        base, a, c2, c24, sharp,
+        crop_center(base, 0.85, 0.55),
+        crop_center(a, 0.85, 0.55),
+        crop_center(c24, 0.75, 0.45),
+        crop_bottom(base, 0.45),
+        crop_bottom(a, 0.45),
+        crop_bottom(c24, 0.45),
+        crop_bottom(sharp, 0.45),
+    ]
+    return variants
+
+
+def decode_barcode_zxing(img: Image.Image):
+    candidates = []
+    debug = []
+
+    opts = zxingcpp.ReaderOptions()
+    opts.try_harder = True
+    opts.try_rotate = True
+    opts.formats = (
+        zxingcpp.BarcodeFormat.EAN13
+        | zxingcpp.BarcodeFormat.EAN8
+        | zxingcpp.BarcodeFormat.UPCA
+        | zxingcpp.BarcodeFormat.UPCE
+        | zxingcpp.BarcodeFormat.CODE128
+        | zxingcpp.BarcodeFormat.CODE39
+    )
+
+    for i, v in enumerate(_variants_for_decode(img), start=1):
+        if v.mode not in ("RGB", "L"):
+            v = v.convert("RGB")
+
+        try:
+            results = zxingcpp.read_barcodes(v, opts)
+        except Exception as e:
+            debug.append(f"variant#{i}: exception={e}")
+            continue
+
+        debug.append(f"variant#{i}: results={len(results)}")
+        for r in results:
+            txt = (r.text or "").strip()
+            if txt:
+                d = re.sub(r"\D", "", txt)
+                if d:
+                    candidates.append(d)
+
+        if candidates:
+            break
+
+    def score(s: str):
+        if len(s) == 13:
+            return 100
+        if len(s) == 12:
+            return 90
+        if 8 <= len(s) <= 14:
+            return 80
+        return 10
+
+    uniq = sorted(set(candidates), key=score, reverse=True)
+    best = uniq[0] if uniq else None
+    return best, uniq, debug
+
+
+@app.route("/api/decode_barcode", methods=["POST"])
+@require_edit_auth
+def api_decode_barcode():
+    if "image" not in request.files:
+        return jsonify({"ok": False, "error": "no_file"}), 400
+
+    f = request.files["image"]
+    if not f or not f.filename:
+        return jsonify({"ok": False, "error": "empty_file"}), 400
+
+    try:
+        img = Image.open(f.stream)
+    except Exception:
+        return jsonify({"ok": False, "error": "cannot_open_image"}), 400
+
+    best, candidates, debug = decode_barcode_zxing(img)
+
+    if not best:
+        return jsonify({
+            "ok": False,
+            "code": None,
+            "candidates": candidates,
+            "error": "not_detected",
+            "debug": debug[-6:],
+        }), 200
+
+    return jsonify({
+        "ok": True,
+        "code": best,
+        "candidates": candidates,
+        "error": None,
+        "debug": debug[-6:],
+    }), 200
+
+
+# =========================
 # ✅ Presigned URL 새로고침 API (자동 갱신용)
 # =========================
 @app.get("/api/presign/photos")
@@ -406,6 +533,33 @@ def api_presign_photos():
 
 
 # =========================
+# ✅ 관리자 전체 삭제 엔드포인트(선택)
+# =========================
+@app.get("/admin/purge_photos")
+@require_edit_auth
+def admin_purge_photos():
+    if not ADMIN_TOKEN:
+        return jsonify({"ok": False, "error": "ADMIN_TOKEN_not_set"}), 403
+
+    token = (request.args.get("token", "") or "").strip()
+    if token != ADMIN_TOKEN:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    try:
+        # photos 테이블 전부 삭제 + S3 products/ 아래 객체 전부 삭제
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM photos")
+        conn.commit()
+        conn.close()
+
+        s3_delete_prefix("products/")
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# =========================
 # ✅ 템플릿 호환용 업로드 라우트
 # =========================
 @app.route("/uploads/<item_code>/<path:filename>")
@@ -436,12 +590,13 @@ def uploaded_file(item_code, filename):
 
 
 # =========================
-# ✅ 조회용 화면: 사진 등록 상품 리스트 + 엑셀
+# ✅ 조회용: 전체 상품 리스트 + 필터(등록/미등록) + 엑셀
 # =========================
-@app.route("/view/products/photos", methods=["GET"])
+@app.route("/view/products", methods=["GET"])
 @require_view_auth
-def view_products_with_photos():
+def view_products():
     q = normalize_code(request.args.get("q", ""))
+    f = (request.args.get("f", "all") or "all").strip().lower()  # all/has/none
 
     conn = get_db()
     cur = conn.cursor()
@@ -453,39 +608,43 @@ def view_products_with_photos():
             p.scan_code,
             COUNT(ph.id) AS photo_count
         FROM products p
-        JOIN photos ph
+        LEFT JOIN photos ph
           ON ph.product_item_code = p.item_code
     """
 
+    where = []
+    params = []
+
     if q:
         like = f"%{q}%"
-        sql = base_sql + """
-        WHERE p.item_code LIKE ?
-           OR p.scan_code LIKE ?
-           OR p.item_name LIKE ?
-        GROUP BY p.item_code, p.item_name, p.scan_code
-        ORDER BY photo_count DESC, p.item_code
-        LIMIT 2000
-        """
-        cur.execute(sql, (like, like, like))
-    else:
-        sql = base_sql + """
-        GROUP BY p.item_code, p.item_name, p.scan_code
-        ORDER BY photo_count DESC, p.item_code
-        LIMIT 2000
-        """
-        cur.execute(sql)
+        where.append("(p.item_code LIKE ? OR p.scan_code LIKE ? OR p.item_name LIKE ?)")
+        params.extend([like, like, like])
 
+    sql = base_sql
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+
+    sql += " GROUP BY p.item_code, p.item_name, p.scan_code "
+
+    if f == "has":
+        sql += " HAVING COUNT(ph.id) > 0 "
+    elif f == "none":
+        sql += " HAVING COUNT(ph.id) = 0 "
+
+    sql += " ORDER BY p.item_code LIMIT 2000 "
+
+    cur.execute(sql, params)
     rows = cur.fetchall()
     conn.close()
 
-    return render_template("products_with_photos.html", rows=rows, q=q)
+    return render_template("products_with_photos.html", rows=rows, q=q, f=f)
 
 
-@app.route("/view/export/products_with_photos.xlsx", methods=["GET"])
+@app.route("/view/export/products.xlsx", methods=["GET"])
 @require_view_auth
-def view_export_products_with_photos_xlsx():
+def view_export_products_xlsx():
     q = normalize_code(request.args.get("q", ""))
+    f = (request.args.get("f", "all") or "all").strip().lower()
 
     conn = get_db()
     cur = conn.cursor()
@@ -497,26 +656,30 @@ def view_export_products_with_photos_xlsx():
             p.scan_code AS 스캔바코드,
             COUNT(ph.id) AS 사진수
         FROM products p
-        JOIN photos ph
+        LEFT JOIN photos ph
           ON ph.product_item_code = p.item_code
     """
 
-    params = ()
+    where = []
+    params = []
+
     if q:
         like = f"%{q}%"
-        sql = base_sql + """
-        WHERE p.item_code LIKE ?
-           OR p.scan_code LIKE ?
-           OR p.item_name LIKE ?
-        GROUP BY p.item_name, p.item_code, p.scan_code
-        ORDER BY 사진수 DESC, 상품코드
-        """
-        params = (like, like, like)
-    else:
-        sql = base_sql + """
-        GROUP BY p.item_name, p.item_code, p.scan_code
-        ORDER BY 사진수 DESC, 상품코드
-        """
+        where.append("(p.item_code LIKE ? OR p.scan_code LIKE ? OR p.item_name LIKE ?)")
+        params.extend([like, like, like])
+
+    sql = base_sql
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+
+    sql += " GROUP BY p.item_name, p.item_code, p.scan_code "
+
+    if f == "has":
+        sql += " HAVING COUNT(ph.id) > 0 "
+    elif f == "none":
+        sql += " HAVING COUNT(ph.id) = 0 "
+
+    sql += " ORDER BY 상품코드 "
 
     cur.execute(sql, params)
     data = cur.fetchall()
@@ -527,11 +690,11 @@ def view_export_products_with_photos_xlsx():
     import io
     bio = io.BytesIO()
     with pd.ExcelWriter(bio, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="사진등록상품")
+        df.to_excel(writer, index=False, sheet_name="상품리스트")
     bio.seek(0)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"사진등록상품리스트_{ts}.xlsx"
+    filename = f"상품리스트_{ts}.xlsx"
 
     return send_file(
         bio,
@@ -617,11 +780,11 @@ def register_product_detail(item_code):
         saved_count = 0
         fail_count = 0
 
-        for f in files:
-            if not f or not f.filename:
+        for f_ in files:
+            if not f_ or not f_.filename:
                 continue
-            if not allowed_file(f.filename):
-                flash(f"지원하지 않는 파일 형식입니다: {f.filename}", "warning")
+            if not allowed_file(f_.filename):
+                flash(f"지원하지 않는 파일 형식입니다: {f_.filename}", "warning")
                 fail_count += 1
                 continue
 
@@ -629,10 +792,10 @@ def register_product_detail(item_code):
             key = s3_key_for(item_code, final_name)
 
             try:
-                data = save_low_quality_jpeg_to_bytes(f)
+                data = save_low_quality_jpeg_to_bytes(f_)
                 s3_put_bytes(key, data, content_type="image/jpeg")
             except Exception as e:
-                flash(f"업로드 실패: {f.filename} → {e}", "danger")
+                flash(f"업로드 실패: {f_.filename} → {e}", "danger")
                 fail_count += 1
                 continue
 
