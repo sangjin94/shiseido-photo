@@ -35,7 +35,7 @@
         <ul class="navbar-nav me-auto mb-2 mb-lg-0">
           {% if session.get('auth_view') or session.get('auth_edit') %}
           <li class="nav-item">
-            <a class="nav-link" href="{{ url_for('view_products_with_photos') }}">조회용</a>
+              <a class="nav-link" href="{{ url_for('view_products') }}">조회용</a>
           </li>
           {% endif %}
           {% if session.get('auth_edit') %}
