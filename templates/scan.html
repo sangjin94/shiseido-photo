@@ -1,0 +1,58 @@
+@'
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-3 shadow-sm">
+  <div class="fw-bold fs-4">바코드 스캔</div>
+  <div class="text-muted">카메라 권한 허용 후 바코드를 비추면 자동 이동합니다.</div>
+
+  <div class="mt-3">
+    <div id="reader" style="width:100%; max-width:560px; margin:0 auto;"></div>
+  </div>
+
+  <hr class="my-3"/>
+
+  <div class="fw-semibold mb-2">스캔이 안 되면 직접 입력</div>
+  <form class="d-flex gap-2" onsubmit="goManual(event)">
+    <input id="manualCode" class="form-control form-control-lg" inputmode="numeric" placeholder="상품코드 또는 바코드 입력">
+    <button class="btn btn-dark btn-lg">조회</button>
+  </form>
+
+  <div class="small text-muted mt-2">
+    * iPhone에서 카메라가 안 뜨면 HTTPS 배포(Render 등)가 필요할 수 있어요.
+  </div>
+</div>
+
+<script src="https://unpkg.com/html5-qrcode"></script>
+<script>
+  function goToCode(code){
+    code = (code || "").trim();
+    if(!code) return;
+    window.location.href = "/products/lookup?code=" + encodeURIComponent(code);
+  }
+  function goManual(e){
+    e.preventDefault();
+    goToCode(document.getElementById("manualCode").value);
+  }
+
+  const html5QrCode = new Html5Qrcode("reader");
+  const config = {
+    fps: 10,
+    qrbox: { width: 280, height: 180 },
+    experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+  };
+
+  Html5Qrcode.getCameras().then(cameras => {
+    if(!cameras || cameras.length === 0) return;
+    const cameraId = cameras[cameras.length - 1].id;
+    html5QrCode.start(
+      cameraId,
+      config,
+      (decodedText) => {
+        html5QrCode.stop().then(() => goToCode(decodedText));
+      },
+      () => {}
+    );
+  }).catch(() => {});
+</script>
+{% endblock %}
+'@ | Out-File -Encoding utf8 .\templates\scan.html

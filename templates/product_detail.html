@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="row g-3">
+  <div class="col-12 col-lg-5">
+    <div class="card p-4">
+      <div class="page-title mb-2">
+        {{ product['item_name'] or '-' }}
+      </div>
+
+      <div class="text-muted mb-3">
+        ITEM_CODE : <span class="fw-semibold">{{ product['item_code'] }}</span><br>
+        SCAN_CODE : <span class="fw-semibold">{{ product['scan_code'] or '-' }}</span>
+      </div>
+
+      <form method="post" enctype="multipart/form-data">
+        <div class="section-title mb-2">사진 업로드 (여러 장 가능)</div>
+        <input class="form-control" type="file" name="photos" multiple accept="image/*">
+        <button class="btn btn-primary w-100 mt-3">업로드 (저화질 저장)</button>
+      </form>
+
+      <div class="text-muted small mt-3">
+        용량 절감을 위해 업로드 시 자동으로 저화질(JPG)로 변환 저장됩니다.
+      </div>
+
+      <div class="mt-3">
+        <a class="btn btn-outline-secondary w-100" href="{{ url_for('home') }}">목록으로</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-7">
+    <div class="card p-4">
+      <div class="d-flex justify-content-between align-items-center">
+        <div class="section-title">PHOTO ARCHIVE</div>
+        <div class="text-muted">총 {{ photos|length }}장</div>
+      </div>
+
+      <hr class="my-3">
+
+      {% if photos|length == 0 %}
+        <div class="text-muted">아직 등록된 사진이 없습니다.</div>
+      {% else %}
+        <div class="row g-3">
+          {% for ph in photos %}
+            <div class="col-12 col-md-6">
+              <img class="thumb"
+                   src="{{ url_for('uploaded_file', item_code=product['item_code'], filename=ph['filename']) }}"
+                   alt="photo">
+
+              <div class="d-flex justify-content-between align-items-center mt-2">
+                <div class="text-muted small">{{ ph['uploaded_at'] }}</div>
+                <form method="post" action="{{ url_for('delete_photo', photo_id=ph['id']) }}"
+                      onsubmit="return confirm('삭제할까요?');">
+                  <button class="btn btn-outline-secondary btn-sm">삭제</button>
+                </form>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{% endblock %}
