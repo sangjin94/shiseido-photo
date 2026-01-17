@@ -3,30 +3,39 @@
 
 <div class="container py-4" style="max-width: 980px;">
   <div class="mb-4">
-    <h3 class="mb-1">시세이도 상품 사진 관리</h3>
-    <div class="text-muted">먼저 사용할 화면을 선택하세요. (각 화면 진입 시 암호키 필요)</div>
+    <div class="text-muted small">시세이도</div>
+    <h3 class="mb-1">상품 사진 관리</h3>
+    <div class="text-muted">조회용 / 등록용 화면을 선택하세요. (각 화면 진입 시 암호키 필요)</div>
   </div>
 
   <div class="row g-3">
     <div class="col-12 col-lg-6">
-      <div class="card p-4 h-100">
+      <div class="card p-4 h-100 shadow-sm">
         <h4 class="mb-2">조회용 화면</h4>
         <div class="text-muted mb-3">
-          사진 등록된 상품 리스트 조회 및 엑셀 출력
+          사진 등록된 상품만 모아 조회하고, 엑셀로 다운로드합니다.
         </div>
-        <a class="btn btn-outline-primary" href="{{ url_for('auth_view') }}">조회용으로 들어가기</a>
+        <div class="d-grid">
+          <a class="btn btn-outline-primary btn-lg" href="{{ url_for('auth_view') }}">조회용으로 들어가기</a>
+        </div>
       </div>
     </div>
 
     <div class="col-12 col-lg-6">
-      <div class="card p-4 h-100">
+      <div class="card p-4 h-100 shadow-sm">
         <h4 class="mb-2">등록용 화면</h4>
         <div class="text-muted mb-3">
-          상품 검색 후 사진 업로드/삭제 등 등록 작업
+          상품 검색 후 사진 업로드/삭제 등 등록 작업을 수행합니다.
         </div>
-        <a class="btn btn-primary" href="{{ url_for('auth_edit') }}">등록용으로 들어가기</a>
+        <div class="d-grid">
+          <a class="btn btn-primary btn-lg" href="{{ url_for('auth_edit') }}">등록용으로 들어가기</a>
+        </div>
       </div>
     </div>
+  </div>
+
+  <div class="mt-4 text-muted small">
+    운영 팁: 등록용으로 로그인하면 조회용 기능도 함께 사용 가능합니다.
   </div>
 </div>
 

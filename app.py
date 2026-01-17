@@ -48,7 +48,7 @@ MAX_CONTENT_LENGTH = int(os.environ.get("MAX_CONTENT_LENGTH", str(20 * 1024 * 10
 # ✅ 관리자 삭제 토큰(선택) - 설정하면 /admin/purge_photos 사용 가능
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "").strip()
 
-# ✅ 모드별 암호키 (필수)
+# ✅ 모드별 암호키(필수)
 VIEW_PASSWORD = os.environ.get("VIEW_PASSWORD", "").strip()   # 조회용
 EDIT_PASSWORD = os.environ.get("EDIT_PASSWORD", "").strip()   # 등록용
 
@@ -100,6 +100,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 def require_view_auth(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
+        # 등록(auth_edit)면 조회도 허용
         if session.get("auth_view") is True or session.get("auth_edit") is True:
             return fn(*args, **kwargs)
         return redirect(url_for("auth_view", next=request.path))
@@ -128,8 +129,7 @@ def auth_view():
         pw = (request.form.get("password", "") or "").strip()
         if pw == VIEW_PASSWORD:
             session["auth_view"] = True
-            # 조회 권한만 부여 (등록은 False 유지)
-            session.pop("auth_edit", None)
+            session.pop("auth_edit", None)  # 조회만
             return redirect(next_url)
         flash("조회용 암호키가 올바르지 않습니다.", "danger")
     return render_template("auth.html", mode="view", title="조회용 화면", next_url=next_url)
@@ -142,8 +142,7 @@ def auth_edit():
         pw = (request.form.get("password", "") or "").strip()
         if pw == EDIT_PASSWORD:
             session["auth_edit"] = True
-            # 등록 권한이면 조회도 허용
-            session["auth_view"] = True
+            session["auth_view"] = True  # 등록이면 조회도 허용
             return redirect(next_url)
         flash("등록용 암호키가 올바르지 않습니다.", "danger")
     return render_template("auth.html", mode="edit", title="등록용 화면", next_url=next_url)
@@ -372,28 +371,6 @@ def load_master_excel():
 
 
 # =========================
-# ✅ 전체 사진 정리(DB + S3)
-# =========================
-def purge_all_photos(delete_s3_objects: bool = True):
-    """
-    photos 테이블 전부 삭제 + (옵션) S3 products/ 아래 객체 전부 삭제
-    """
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT id FROM photos")
-    rows = cur.fetchall()
-
-    cur.execute("DELETE FROM photos")
-    conn.commit()
-    conn.close()
-
-    if delete_s3_objects:
-        s3_delete_prefix("products/")
-
-    return len(rows)
-
-
-# =========================
 # ✅ Presigned URL 새로고침 API (자동 갱신용)
 # =========================
 @app.get("/api/presign/photos")
@@ -429,36 +406,11 @@ def api_presign_photos():
 
 
 # =========================
-# ✅ 관리자 전체 삭제 엔드포인트(선택)
-# =========================
-@app.get("/admin/purge_photos")
-@require_edit_auth
-def admin_purge_photos():
-    if not ADMIN_TOKEN:
-        return jsonify({"ok": False, "error": "ADMIN_TOKEN_not_set"}), 403
-
-    token = (request.args.get("token", "") or "").strip()
-    if token != ADMIN_TOKEN:
-        return jsonify({"ok": False, "error": "unauthorized"}), 401
-
-    try:
-        deleted = purge_all_photos(delete_s3_objects=True)
-        return jsonify({"ok": True, "deleted_rows": deleted})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-# =========================
 # ✅ 템플릿 호환용 업로드 라우트
 # =========================
 @app.route("/uploads/<item_code>/<path:filename>")
 @require_view_auth
 def uploaded_file(item_code, filename):
-    """
-    템플릿 호환용:
-    - DB에서 s3_key를 찾아 presigned URL로 redirect
-    - s3_key가 없으면 로컬 파일(/static/uploads/<item_code>/<filename>)로 서빙 (폴백)
-    """
     item_code = normalize_code(item_code)
     filename = (filename or "").strip()
     if not item_code or not filename:
@@ -476,7 +428,6 @@ def uploaded_file(item_code, filename):
         abort(404)
 
     s3_key = row["s3_key"]
-
     if s3_key:
         return redirect(presigned_get_url(s3_key, expires_sec=PRESIGNED_EXPIRES))
 
@@ -591,7 +542,7 @@ def view_export_products_with_photos_xlsx():
 
 
 # =========================
-# ✅ 등록용 화면: 기존 홈/상품 상세를 /register 로 이동
+# ✅ 등록용 화면: 상품 검색/상세/업로드
 # =========================
 @app.route("/register", methods=["GET"])
 @require_edit_auth
@@ -771,13 +722,8 @@ bootstrap()
 
 def main_cli():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", nargs="?", default="run", choices=["run", "purge_photos", "load_master"])
+    parser.add_argument("command", nargs="?", default="run", choices=["run", "load_master"])
     args = parser.parse_args()
-
-    if args.command == "purge_photos":
-        deleted = purge_all_photos(delete_s3_objects=True)
-        print(f"[OK] purge_photos done. deleted_rows={deleted}")
-        return
 
     if args.command == "load_master":
         load_master_excel()
@@ -789,4 +735,3 @@ def main_cli():
 
 if __name__ == "__main__":
     main_cli()
-

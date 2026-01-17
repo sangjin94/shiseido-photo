@@ -2,12 +2,17 @@
 {% block content %}
 
 <div class="container py-4" style="max-width: 520px;">
-  <div class="card p-4">
-    <h4 class="mb-2">{{ title }}</h4>
-    <div class="text-muted mb-3">암호키를 입력해야 접근할 수 있습니다.</div>
+  <div class="card p-4 shadow-sm">
+    <div class="mb-2">
+      <div class="text-muted small">암호키 입력</div>
+      <h4 class="mb-0">{{ title }}</h4>
+    </div>
 
-    <form method="post">
-      <input type="hidden" name="next_url" value="{{ next_url }}">
+    <div class="text-muted mb-3">
+      암호키를 입력해야 접근할 수 있습니다.
+    </div>
+
+    <form method="post" class="mt-2">
       <div class="mb-3">
         <label class="form-label">암호키</label>
         <input type="password" name="password" class="form-control" autocomplete="current-password" autofocus>
