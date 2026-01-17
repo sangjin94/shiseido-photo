@@ -3,60 +3,17 @@
 
 <div class="card p-3 p-md-4">
 
-  <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3">
-    <div>
-      <div class="page-title">상품 조회</div>
-      <div class="text-muted">사진(촬영)으로 바코드를 인식해 검색합니다.</div>
-    </div>
-
-    <div class="d-flex flex-column gap-2" style="min-width:280px;">
-      <!-- ✅ 사진 스캔 메인 버튼 (사용자 클릭 → input.click()) -->
-      <button id="photoBtn" type="button" class="btn btn-primary btn-lg w-100">
-        바코드 촬영 스캔
-      </button>
-
-      <div class="text-muted small">
-        iPhone 권장: 설정 → 카메라 → 포맷 → <b>가장 호환(JPEG)</b><br>
-        (HEIC이면 웹에서 인식이 잘 안 될 수 있음)
-      </div>
-    </div>
+  <div class="d-flex flex-column gap-2 mb-3">
+    <div class="page-title">상품 조회</div>
+    <div class="text-muted">상품코드 / 바코드 / 상품명으로 검색합니다.</div>
   </div>
 
-  <hr class="my-3">
-
-  <form class="d-flex gap-2" method="get" action="{{ url_for('home') }}" id="searchForm">
-    <input class="form-control" name="q" id="qInput" value="{{ q }}"
-           placeholder="예) 880... / ITEM_CODE / 상품명" autocomplete="off">
+  <form class="d-flex gap-2" method="get" action="{{ url_for('home') }}">
+    <input class="form-control" name="q" value="{{ q }}"
+           placeholder="예) 880... / ITEM_CODE / 상품명"
+           autocomplete="off">
     <button class="btn btn-primary" type="submit">검색</button>
   </form>
-
-  <!-- ✅ 디버그 패널 -->
-  <div class="mt-3 p-3" style="background:#f8f8f8;border:1px solid #e1e1e1;border-radius:12px;">
-    <div class="d-flex justify-content-between align-items-center">
-      <div class="fw-bold" style="color:#111;">디버그 로그</div>
-      <button type="button" class="btn btn-outline-secondary btn-sm" id="clearLogBtn">지우기</button>
-    </div>
-    <div class="text-muted small mt-1">
-      버튼 클릭 → 파일 수신(change) → 이미지 로딩 → 디코딩 순으로 확인하세요.
-    </div>
-    <pre id="logBox" style="margin:0;margin-top:10px;white-space:pre-wrap;word-break:break-word;background:#fff;border:1px solid #eee;border-radius:10px;padding:10px;min-height:120px;max-height:260px;overflow:auto;font-size:12px;color:#111;"></pre>
-  </div>
-
-  <!-- ✅ 마지막 인식 바코드 표시 -->
-  <div class="mt-3 p-3" style="background:#fff;border:1px solid #e1e1e1;border-radius:12px;">
-    <div class="fw-bold" style="color:#111;">마지막 인식 바코드</div>
-    <div id="lastCode" style="font-size:22px;font-weight:800;margin-top:6px;color:#000;">-</div>
-    <div class="text-muted small mt-1">인식되면 자동으로 검색됩니다.</div>
-  </div>
-
-  <!-- ✅ 파일 선택 input (iOS: display:none 금지 / 화면 밖으로) -->
-  <input
-    type="file"
-    id="photoInput"
-    accept="image/*"
-    capture="environment"
-    style="position:fixed; left:-9999px; top:-9999px; width:1px; height:1px; opacity:0;"
-  >
 
   <hr class="my-3">
 
@@ -70,15 +27,18 @@
       {% endif %}
     </div>
 
-    <div class="list-group" id="resultList">
+    <div class="list-group">
       {% for p in products %}
         <a class="list-group-item list-group-item-action py-3"
            href="{{ url_for('product_detail', item_code=p['item_code']) }}">
           <div class="d-flex justify-content-between align-items-start gap-3">
             <div style="min-width:0;">
-              <div class="fw-bold text-truncate">{{ p['item_name'] or '-' }}</div>
+              <div class="fw-bold text-truncate">
+                {{ p['item_name'] or '-' }}
+              </div>
               <div class="small text-muted mt-1">
-                ITEM_CODE: <span class="badge-soft">{{ p['item_code'] }}</span>
+                ITEM_CODE:
+                <span class="badge-soft">{{ p['item_code'] }}</span>
                 {% if p['scan_code'] %}
                   <span class="ms-2">SCAN: {{ p['scan_code'] }}</span>
                 {% endif %}
@@ -87,7 +47,9 @@
 
             <div class="text-end" style="white-space:nowrap;">
               {% if p['photo_count'] and p['photo_count']|int > 0 %}
-                <div class="badge-photo-on">사진 등록됨 · {{ p['photo_count'] }}장</div>
+                <div class="badge-photo-on">
+                  사진 등록됨 · {{ p['photo_count'] }}장
+                </div>
               {% else %}
                 <div class="badge-photo-off">사진 없음</div>
               {% endif %}
@@ -98,166 +60,5 @@
     </div>
   {% endif %}
 </div>
-
-<!-- ✅ 사진 스캔용 ZXing -->
-<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
-
-<script>
-(function(){
-  const photoBtn = document.getElementById("photoBtn");
-  const photoInput = document.getElementById("photoInput");
-  const qInput = document.getElementById("qInput");
-  const searchForm = document.getElementById("searchForm");
-
-  const logBox = document.getElementById("logBox");
-  const clearLogBtn = document.getElementById("clearLogBtn");
-  const lastCodeEl = document.getElementById("lastCode");
-
-  function log(msg){
-    const t = new Date().toISOString().replace("T"," ").replace("Z","");
-    logBox.textContent += `[${t}] ${msg}\n`;
-    logBox.scrollTop = logBox.scrollHeight;
-  }
-
-  function digitsOnly(s){
-    return (s || "").replace(/\D/g, "");
-  }
-
-  clearLogBtn.addEventListener("click", () => {
-    logBox.textContent = "";
-    log("로그 초기화");
-  });
-
-  // ✅ 버튼 클릭 → input 열기 (사용자 제스처로 iOS 안정)
-  photoBtn.addEventListener("click", () => {
-    log("버튼 클릭됨 → 파일 선택창/카메라 호출 시도");
-    // 같은 파일 다시 선택해도 change 뜨게 초기화
-    photoInput.value = "";
-    try{
-      photoInput.click();
-    }catch(e){
-      log("photoInput.click() 실패: " + String(e));
-      alert("카메라/파일 선택창을 열지 못했습니다. Safari 설정/콘텐츠 차단을 확인해 주세요.");
-    }
-  });
-
-  // ✅ change 이벤트가 들어오는지부터 확인
-  photoInput.addEventListener("change", async () => {
-    const file = photoInput.files && photoInput.files[0];
-    if (!file){
-      log("파일 선택/촬영이 취소됨 (change는 왔으나 file 없음)");
-      return;
-    }
-
-    log(`파일 수신됨: name="${file.name||"(no name)"}", type="${file.type||"(none)"}", size=${file.size}`);
-
-    // iPhone HEIC면 type이 image/heic 또는 빈 값인 경우도 있음
-    // 이 경우 JS 이미지 로딩 단계에서 실패할 수 있음
-    try{
-      log("이미지 로딩 시작(ObjectURL 생성)");
-      const imgUrl = URL.createObjectURL(file);
-
-      const img = new Image();
-      img.src = imgUrl;
-
-      await new Promise((res, rej) => {
-        img.onload = () => res();
-        img.onerror = (e) => rej(e);
-      });
-
-      log(`이미지 로딩 성공: w=${img.width}, h=${img.height}`);
-
-      // 캔버스로 변환(축소)
-      const maxW = 1600;
-      const scale = Math.min(1, maxW / img.width);
-
-      const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
-
-      canvas.width = Math.floor(img.width * scale);
-      canvas.height = Math.floor(img.height * scale);
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-      URL.revokeObjectURL(imgUrl);
-      log(`캔버스 변환 완료: w=${canvas.width}, h=${canvas.height}`);
-
-      // 중앙 크롭 함수
-      function cropCanvas(src, rateW, rateH){
-        const cw = src.width, ch = src.height;
-        const w = Math.floor(cw * rateW);
-        const h = Math.floor(ch * rateH);
-        const sx = Math.floor((cw - w) / 2);
-        const sy = Math.floor((ch - h) / 2);
-
-        const out = document.createElement("canvas");
-        out.width = w;
-        out.height = h;
-        out.getContext("2d").drawImage(src, sx, sy, w, h, 0, 0, w, h);
-        return out;
-      }
-
-      log("ZXing 디코딩 시작 (원본 → 중앙크롭 2단)");
-
-      const reader = new ZXing.BrowserMultiFormatReader();
-
-      async function tryDecode(c){
-        try{
-          const r = await reader.decodeFromCanvas(c);
-          return r && r.text ? r.text : "";
-        }catch(e){
-          return "";
-        }
-      }
-
-      let code = await tryDecode(canvas);
-      if (!code){
-        log("원본 디코딩 실패 → 중앙크롭(0.85,0.55) 재시도");
-        code = await tryDecode(cropCanvas(canvas, 0.85, 0.55));
-      }
-      if (!code){
-        log("크롭1 실패 → 중앙크롭(0.70,0.45) 재시도");
-        code = await tryDecode(cropCanvas(canvas, 0.70, 0.45));
-      }
-
-      try{ reader.reset(); }catch(e){}
-
-      if (!code){
-        log("최종 디코딩 실패: 바코드 미검출");
-        alert(
-          "사진에서 바코드를 인식하지 못했습니다.\n\n" +
-          "1) iPhone 설정 → 카메라 → 포맷을 '가장 호환(JPEG)'로 변경\n" +
-          "2) 바코드를 더 크게/선명하게 촬영\n" +
-          "3) 반사 없는 각도로 촬영\n"
-        );
-        return;
-      }
-
-      log("디코딩 성공: " + code);
-
-      // 숫자만 추출해서 검색
-      const d = digitsOnly(code);
-      lastCodeEl.textContent = d || code;
-
-      if (!d){
-        log("주의: 숫자만 추출 결과가 빈 값(코드 형식 확인 필요)");
-      }
-
-      // ✅ 바로 검색
-      qInput.value = d || code;
-      log(`검색 실행: q="${qInput.value}"`);
-      searchForm.submit();
-
-    }catch(err){
-      log("오류 발생: " + String(err));
-      alert(
-        "사진을 처리하지 못했습니다.\n" +
-        "HEIC 포맷일 가능성이 큽니다.\n\n" +
-        "iPhone 설정 → 카메라 → 포맷 → '가장 호환(JPEG)'로 변경 후 다시 시도해 주세요."
-      );
-    }
-  });
-
-})();
-</script>
 
 {% endblock %}
