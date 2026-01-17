@@ -13,13 +13,14 @@
         SCAN_CODE : <span class="fw-semibold">{{ product['scan_code'] or '-' }}</span>
       </div>
 
-      <form method="post" enctype="multipart/form-data">
+      <!-- ✅ AJAX 업로드 폼 -->
+      <form id="uploadForm" method="post" enctype="multipart/form-data">
         <div class="section-title mb-2">사진 업로드 (여러 장 가능)</div>
-        <input class="form-control" type="file" name="photos" multiple accept="image/*">
-        <button class="btn btn-primary w-100 mt-3">업로드 (저화질 저장)</button>
+        <input id="photoInput" class="form-control" type="file" name="photos" multiple accept="image/*">
+        <button id="uploadBtn" class="btn btn-primary w-100 mt-3" type="submit">업로드 (저화질 저장)</button>
       </form>
 
-      <div class="text-muted small mt-3">
+      <div id="uploadHint" class="text-muted small mt-3">
         용량 절감을 위해 업로드 시 자동으로 저화질(JPG)로 변환 저장됩니다.
       </div>
 
@@ -33,34 +34,270 @@
     <div class="card p-4">
       <div class="d-flex justify-content-between align-items-center">
         <div class="section-title">PHOTO ARCHIVE</div>
-        <div class="text-muted">총 {{ photos|length }}장</div>
+        <div class="text-muted">총 <span id="photoCount">{{ photos|length }}</span>장</div>
       </div>
 
       <hr class="my-3">
 
-      {% if photos|length == 0 %}
-        <div class="text-muted">아직 등록된 사진이 없습니다.</div>
-      {% else %}
-        <div class="row g-3">
-          {% for ph in photos %}
-            <div class="col-12 col-md-6">
-              <img class="thumb"
-                   src="{{ url_for('uploaded_file', item_code=product['item_code'], filename=ph['filename']) }}"
-                   alt="photo">
+      <div id="emptyState" class="text-muted" {% if photos|length != 0 %}style="display:none"{% endif %}>
+        아직 등록된 사진이 없습니다.
+      </div>
 
-              <div class="d-flex justify-content-between align-items-center mt-2">
-                <div class="text-muted small">{{ ph['uploaded_at'] }}</div>
-                <form method="post" action="{{ url_for('delete_photo', photo_id=ph['id']) }}"
-                      onsubmit="return confirm('삭제할까요?');">
-                  <button class="btn btn-outline-secondary btn-sm">삭제</button>
-                </form>
-              </div>
+      <div id="photoGrid" class="row g-3" {% if photos|length == 0 %}style="display:none"{% endif %}>
+        {% for ph in photos %}
+          <div class="col-12 col-md-6 photo-card" data-photo-id="{{ ph['id'] }}">
+            <!-- ✅ 썸네일 클릭 -> 모달 -->
+            <img class="thumb photo-img"
+                 src="{{ ph['url'] }}"
+                 data-photo-id="{{ ph['id'] }}"
+                 data-full-url="{{ ph['url'] }}"
+                 alt="photo"
+                 style="cursor: zoom-in;">
+
+            <div class="d-flex justify-content-between align-items-center mt-2">
+              <div class="text-muted small uploaded-at">{{ ph['uploaded_at'] }}</div>
+              <form method="post" action="{{ url_for('delete_photo', photo_id=ph['id']) }}"
+                    onsubmit="return confirm('삭제할까요?');">
+                <button class="btn btn-outline-secondary btn-sm" type="submit">삭제</button>
+              </form>
             </div>
-          {% endfor %}
-        </div>
-      {% endif %}
+          </div>
+        {% endfor %}
+      </div>
     </div>
   </div>
 </div>
+
+<!-- =========================
+     ✅ 모달(원본 크게 보기)
+     - Bootstrap을 쓰고 있으니 기본 모달로 구현
+     ========================= -->
+<div class="modal fade" id="photoModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-xl">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div class="modal-title fw-semibold">PHOTO VIEW</div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="text-center">
+          <img id="modalImg" src="" alt="full" style="max-width:100%; height:auto;">
+        </div>
+      </div>
+      <div class="modal-footer d-flex justify-content-between">
+        <div class="text-muted small" id="modalMeta"></div>
+        <a id="modalOpenNewTab" class="btn btn-outline-secondary btn-sm" href="#" target="_blank" rel="noopener">
+          새 탭에서 열기
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- =========================
+     ✅ JS: 모달 + AJAX 업로드 + presigned 자동 새로고침
+     ========================= -->
+<script>
+(() => {
+  const ITEM_CODE = "{{ item_code }}";
+  const EXPIRES = {{ presigned_expires }};                 // 초
+  const REFRESH_MARGIN = {{ presigned_refresh_margin }};   // 초
+  if (!ITEM_CODE) return;
+
+  const photoGrid = document.getElementById("photoGrid");
+  const emptyState = document.getElementById("emptyState");
+  const photoCountEl = document.getElementById("photoCount");
+
+  const uploadForm = document.getElementById("uploadForm");
+  const photoInput = document.getElementById("photoInput");
+  const uploadBtn = document.getElementById("uploadBtn");
+
+  // Bootstrap 모달 객체
+  const modalEl = document.getElementById("photoModal");
+  const modalImg = document.getElementById("modalImg");
+  const modalMeta = document.getElementById("modalMeta");
+  const modalOpenNewTab = document.getElementById("modalOpenNewTab");
+  const bsModal = (window.bootstrap && window.bootstrap.Modal) ? new window.bootstrap.Modal(modalEl) : null;
+
+  function setCount(n) {
+    photoCountEl.textContent = String(n);
+  }
+  function getCount() {
+    return parseInt(photoCountEl.textContent || "0", 10) || 0;
+  }
+
+  function showGridIfNeeded() {
+    const n = getCount();
+    if (n <= 0) {
+      emptyState.style.display = "";
+      photoGrid.style.display = "none";
+    } else {
+      emptyState.style.display = "none";
+      photoGrid.style.display = "";
+    }
+  }
+
+  // =========================
+  // 1) 썸네일 클릭 -> 모달 오픈
+  // =========================
+  photoGrid.addEventListener("click", (e) => {
+    const img = e.target.closest("img.photo-img");
+    if (!img) return;
+
+    const url = img.dataset.fullUrl || img.src;
+    const id = img.dataset.photoId || "";
+    const uploadedAt = img.closest(".photo-card")?.querySelector(".uploaded-at")?.textContent || "";
+
+    modalImg.src = url;
+    modalMeta.textContent = id ? `ID: ${id} / ${uploadedAt}` : uploadedAt;
+    modalOpenNewTab.href = url;
+
+    if (bsModal) bsModal.show();
+    else window.open(url, "_blank"); // Bootstrap이 없으면 새탭
+  });
+
+  // =========================
+  // 2) AJAX 업로드 (새로고침 없이 즉시 추가)
+  // - 서버는 POST 후 redirect(302) 구조지만,
+  //   fetch는 302를 따라가서 최종 HTML을 받음.
+  // - 업로드 후 /api/presign/photos로 최신 목록 받아서
+  //   화면을 동기화한다.
+  // =========================
+  uploadForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+
+    const files = photoInput.files;
+    if (!files || files.length === 0) {
+      alert("파일을 선택해 주세요.");
+      return;
+    }
+
+    uploadBtn.disabled = true;
+    const oldText = uploadBtn.textContent;
+    uploadBtn.textContent = "업로드 중...";
+
+    try {
+      const fd = new FormData(uploadForm);
+
+      // 같은 URL로 POST (현재 페이지)
+      const res = await fetch(window.location.pathname, {
+        method: "POST",
+        body: fd
+      });
+
+      // 서버가 redirect를 하든 말든, 업로드만 성공하면 ok로 떨어지는 경우가 많음
+      // (flask debug/프록시 환경 따라 다를 수 있어도, 다음 단계에서 목록 갱신으로 해결)
+      if (!res.ok) {
+        alert("업로드 실패: 서버 응답 오류");
+        return;
+      }
+
+      // input 초기화
+      photoInput.value = "";
+
+      // 최신 presigned 목록으로 화면 동기화
+      await syncPhotosFromServer();
+
+    } catch (err) {
+      console.warn(err);
+      alert("업로드 실패: 네트워크 오류");
+    } finally {
+      uploadBtn.disabled = false;
+      uploadBtn.textContent = oldText;
+    }
+  });
+
+  // =========================
+  // 서버에서 최신 presigned 목록 받기
+  // - id/url만 오므로, 기존 DOM은 유지하면서 URL 업데이트
+  // - 새로 생긴 id는 카드 생성(업로드 직후)
+  // - 삭제된 id는 DOM에서 제거(삭제 후에도 동기화 가능)
+  // =========================
+  async function syncPhotosFromServer() {
+    const res = await fetch(`/api/presign/photos?item_code=${encodeURIComponent(ITEM_CODE)}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.ok || !Array.isArray(data.photos)) return;
+
+    const serverList = data.photos; // [{id,url},...]
+    const serverIds = new Set(serverList.map(p => String(p.id)));
+
+    // 1) 기존 DOM 맵
+    const domCards = Array.from(photoGrid.querySelectorAll(".photo-card"));
+    const domMap = {};
+    domCards.forEach(card => {
+      const id = card.dataset.photoId;
+      if (id) domMap[String(id)] = card;
+    });
+
+    // 2) URL 업데이트 + 신규 추가
+    for (const p of serverList) {
+      const id = String(p.id);
+      const url = p.url;
+
+      if (domMap[id]) {
+        // 기존 카드 URL 갱신
+        const img = domMap[id].querySelector("img.photo-img");
+        if (img) {
+          img.src = url;
+          img.dataset.fullUrl = url;
+        }
+        // 모달이 열려있고 같은 이미지면 같이 갱신
+        if (modalEl.classList.contains("show") && modalMeta.textContent.includes(`ID: ${id}`)) {
+          modalImg.src = url;
+          modalOpenNewTab.href = url;
+        }
+      } else {
+        // 신규 카드 생성 (uploaded_at은 서버 API에서 안 주므로, "방금"으로 표시)
+        const col = document.createElement("div");
+        col.className = "col-12 col-md-6 photo-card";
+        col.dataset.photoId = id;
+
+        // delete는 기존 서버 라우트로 POST 보내야 해서 action을 id 기반으로 구성
+        const deleteAction = `/photo/${id}/delete`;
+
+        col.innerHTML = `
+          <img class="thumb photo-img"
+               src="${url}"
+               data-photo-id="${id}"
+               data-full-url="${url}"
+               alt="photo"
+               style="cursor: zoom-in;">
+          <div class="d-flex justify-content-between align-items-center mt-2">
+            <div class="text-muted small uploaded-at">방금</div>
+            <form method="post" action="${deleteAction}" onsubmit="return confirm('삭제할까요?');">
+              <button class="btn btn-outline-secondary btn-sm" type="submit">삭제</button>
+            </form>
+          </div>
+        `;
+
+        // 최신이 위로 오게 서버가 DESC이므로 grid 맨 앞에 prepend
+        photoGrid.prepend(col);
+      }
+    }
+
+    // 3) 서버에 없는 DOM 제거 (삭제 반영)
+    for (const card of domCards) {
+      const id = String(card.dataset.photoId || "");
+      if (id && !serverIds.has(id)) {
+        card.remove();
+      }
+    }
+
+    // 4) 카운트/empty 상태 갱신
+    setCount(serverList.length);
+    showGridIfNeeded();
+  }
+
+  // =========================
+  // 3) presigned 자동 새로고침 (만료 전 갱신)
+  // =========================
+  const refreshMs = Math.max(5, (EXPIRES - REFRESH_MARGIN)) * 1000;
+  setInterval(syncPhotosFromServer, refreshMs);
+
+  // 초기 상태
+  showGridIfNeeded();
+})();
+</script>
 
 {% endblock %}

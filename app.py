@@ -1,13 +1,14 @@
 import os
 import re
 import sqlite3
+import argparse
 from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    flash, abort, jsonify
+    flash, abort, jsonify, send_from_directory
 )
 
 from PIL import Image, ImageOps, ImageEnhance, ImageFilter
@@ -30,7 +31,7 @@ AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip()
 
 # Presigned 유효시간(초)
 PRESIGNED_EXPIRES = int(os.environ.get("PRESIGNED_EXPIRES", "1800"))  # 기본 30분
-# 만료 전 자동 새로고침 여유(초) - 예: 120초 전 갱신
+# 만료 전 자동 새로고침 여유(초)
 PRESIGNED_REFRESH_MARGIN = int(os.environ.get("PRESIGNED_REFRESH_MARGIN", "120"))
 
 # 서버 배포 시 Secret Key는 반드시 env로 주입 권장
@@ -38,6 +39,12 @@ FLASK_SECRET_KEY = os.environ.get("FLASK_SECRET_KEY", "change-this-to-a-random-s
 
 # 마스터 엑셀 자동 로드 여부 (서버에서 매번 로드 싫으면 0)
 AUTO_LOAD_MASTER = os.environ.get("AUTO_LOAD_MASTER", "1").strip()  # "1" or "0"
+
+# ✅ 업로드 용량 제한(바이트) - 기본 20MB
+MAX_CONTENT_LENGTH = int(os.environ.get("MAX_CONTENT_LENGTH", str(20 * 1024 * 1024)))
+
+# ✅ 관리자 삭제 토큰(선택) - 설정하면 /admin/purge_photos 사용 가능
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "").strip()
 
 if not all([S3_BUCKET, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]):
     raise SystemExit(
@@ -70,6 +77,7 @@ JPEG_QUALITY = 65
 
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
+app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -176,7 +184,7 @@ def s3_put_bytes(key: str, data: bytes, content_type: str = "image/jpeg"):
             ContentType=content_type,
         )
     except ClientError as e:
-        raise RuntimeError(f"S3 업로드 실패: {e}")
+        raise RuntimeError(f"S3 PutObject 실패: {e}")
 
 
 def s3_delete(key: str):
@@ -184,6 +192,24 @@ def s3_delete(key: str):
         s3.delete_object(Bucket=S3_BUCKET, Key=key)
     except ClientError:
         pass
+
+
+def s3_delete_prefix(prefix: str):
+    """
+    prefix 아래 객체 전부 삭제 (최대 1000개 단위로 반복)
+    """
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=prefix):
+        contents = page.get("Contents", [])
+        if not contents:
+            continue
+        objects = [{"Key": obj["Key"]} for obj in contents]
+        for i in range(0, len(objects), 1000):
+            chunk = objects[i:i + 1000]
+            try:
+                s3.delete_objects(Bucket=S3_BUCKET, Delete={"Objects": chunk})
+            except ClientError as e:
+                raise RuntimeError(f"S3 prefix 삭제 실패: {e}")
 
 
 def presigned_get_url(key: str, expires_sec: int = None) -> str:
@@ -226,15 +252,11 @@ def init_db():
             product_item_code TEXT NOT NULL,
             filename TEXT NOT NULL,
             uploaded_at TEXT NOT NULL,
+            s3_key TEXT,
             FOREIGN KEY(product_item_code) REFERENCES products(item_code)
         )
         """
     )
-
-    # ✅ S3 key 컬럼 추가 (기존 DB 자동 업그레이드)
-    if not _column_exists(cur, "photos", "s3_key"):
-        cur.execute("ALTER TABLE photos ADD COLUMN s3_key TEXT")
-        conn.commit()
 
     conn.commit()
     conn.close()
@@ -278,6 +300,28 @@ def load_master_excel():
 
     conn.commit()
     conn.close()
+
+
+# =========================
+# ✅ 전체 사진 정리(DB + S3)
+# =========================
+def purge_all_photos(delete_s3_objects: bool = True):
+    """
+    photos 테이블 전부 삭제 + (옵션) S3 products/ 아래 객체 전부 삭제
+    """
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM photos")
+    rows = cur.fetchall()
+
+    cur.execute("DELETE FROM photos")
+    conn.commit()
+    conn.close()
+
+    if delete_s3_objects:
+        s3_delete_prefix("products/")
+
+    return len(rows)
 
 
 # =========================
@@ -411,10 +455,6 @@ def api_decode_barcode():
 # =========================
 @app.get("/api/presign/photos")
 def api_presign_photos():
-    """
-    query: item_code=...
-    return: { ok: true, expires_in: N, photos: [{id, url}] }
-    """
     item_code = normalize_code(request.args.get("item_code", ""))
     if not item_code:
         return jsonify({"ok": False, "error": "missing_item_code"}), 400
@@ -442,6 +482,62 @@ def api_presign_photos():
         "refresh_margin": PRESIGNED_REFRESH_MARGIN,
         "photos": out
     })
+
+
+# =========================
+# ✅ 관리자 전체 삭제 엔드포인트(선택)
+# =========================
+@app.get("/admin/purge_photos")
+def admin_purge_photos():
+    if not ADMIN_TOKEN:
+        return jsonify({"ok": False, "error": "ADMIN_TOKEN_not_set"}), 403
+
+    token = (request.args.get("token", "") or "").strip()
+    if token != ADMIN_TOKEN:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    try:
+        deleted = purge_all_photos(delete_s3_objects=True)
+        return jsonify({"ok": True, "deleted_rows": deleted})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# =========================
+# ✅ 템플릿 호환용 라우트 (중요)
+# - product_detail.html 이 url_for('uploaded_file', item_code=..., filename=...) 를 사용해도 500 안 나게 함
+# =========================
+@app.route("/uploads/<item_code>/<path:filename>")
+def uploaded_file(item_code, filename):
+    """
+    템플릿 호환용:
+    - DB에서 s3_key를 찾아 presigned URL로 redirect
+    - s3_key가 없으면 로컬 파일(/static/uploads/<item_code>/<filename>)로 서빙 (폴백)
+    """
+    item_code = normalize_code(item_code)
+    filename = (filename or "").strip()
+    if not item_code or not filename:
+        abort(404)
+
+    conn = get_db()
+    cur = conn.cursor()
+    row = cur.execute(
+        "SELECT s3_key, filename FROM photos WHERE product_item_code=? AND filename=? ORDER BY id DESC LIMIT 1",
+        (item_code, filename),
+    ).fetchone()
+    conn.close()
+
+    if not row:
+        abort(404)
+
+    s3_key = row["s3_key"]
+
+    if s3_key:
+        return redirect(presigned_get_url(s3_key, expires_sec=PRESIGNED_EXPIRES))
+
+    # 로컬 폴백(혹시 로컬에 파일을 저장하는 구조를 병행할 경우 대비)
+    uploads_dir = BASE_DIR / "static" / "uploads" / item_code
+    return send_from_directory(str(uploads_dir), filename)
 
 
 # =========================
@@ -507,7 +603,7 @@ def product_detail(item_code):
 
     if request.method == "POST":
         if "photos" not in request.files:
-            flash("업로드할 파일이 없습니다.", "danger")
+            flash("업로드할 파일이 없습니다. (폼 enctype='multipart/form-data' 확인)", "danger")
             return redirect(url_for("product_detail", item_code=item_code))
 
         files = request.files.getlist("photos")
@@ -516,22 +612,25 @@ def product_detail(item_code):
             return redirect(url_for("product_detail", item_code=item_code))
 
         saved_count = 0
+        fail_count = 0
 
         for f in files:
             if not f or not f.filename:
                 continue
             if not allowed_file(f.filename):
                 flash(f"지원하지 않는 파일 형식입니다: {f.filename}", "warning")
+                fail_count += 1
                 continue
 
-            final_name = next_photo_filename(cur, item_code)  # itemcode_001.jpg
+            final_name = next_photo_filename(cur, item_code)
             key = s3_key_for(item_code, final_name)
 
             try:
                 data = save_low_quality_jpeg_to_bytes(f)
                 s3_put_bytes(key, data, content_type="image/jpeg")
             except Exception as e:
-                flash(f"S3 업로드 실패: {f.filename} / {e}", "danger")
+                flash(f"업로드 실패: {f.filename} → {e}", "danger")
+                fail_count += 1
                 continue
 
             cur.execute(
@@ -541,7 +640,7 @@ def product_detail(item_code):
             saved_count += 1
 
         conn.commit()
-        flash(f"사진 {saved_count}장 업로드 완료 (S3 저장)", "success")
+        flash(f"사진 업로드: 성공 {saved_count} / 실패 {fail_count} (S3 저장)", "success" if saved_count else "warning")
         conn.close()
         return redirect(url_for("product_detail", item_code=item_code))
 
@@ -568,6 +667,7 @@ def product_detail(item_code):
         "product_detail.html",
         product=product,
         photos=photos,
+        item_code=item_code,  # ✅ 템플릿/JS에서 편하게 사용
         presigned_expires=PRESIGNED_EXPIRES,
         presigned_refresh_margin=PRESIGNED_REFRESH_MARGIN,
     )
@@ -610,10 +710,27 @@ def bootstrap():
             print("[WARN] Master load skipped:", e)
 
 
-# WSGI 서버(gunicorn)에서 import될 때도 실행되게
 bootstrap()
 
-# 로컬 실행용
-if __name__ == "__main__":
-    # 로컬에서는 debug=True 가능, 서버에서는 gunicorn 사용 권장
+
+def main_cli():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("command", nargs="?", default="run", choices=["run", "purge_photos", "load_master"])
+    args = parser.parse_args()
+
+    if args.command == "purge_photos":
+        deleted = purge_all_photos(delete_s3_objects=True)
+        print(f"[OK] purge_photos done. deleted_rows={deleted}")
+        return
+
+    if args.command == "load_master":
+        load_master_excel()
+        print("[OK] master loaded.")
+        return
+
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")), debug=True)
+
+
+if __name__ == "__main__":
+    main_cli()
+
