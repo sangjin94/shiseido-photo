@@ -371,7 +371,7 @@ def load_master_excel():
 
 
 # =========================
-# ✅ zxing-cpp 바코드 인식(서버 API)
+# ✅ zxing-cpp 바코드 인식(서버 API) - 등록용에서만 사용 권장
 # =========================
 def _variants_for_decode(img: Image.Image):
     base = _fix_exif_orientation(img)
@@ -546,7 +546,6 @@ def admin_purge_photos():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
 
     try:
-        # photos 테이블 전부 삭제 + S3 products/ 아래 객체 전부 삭제
         conn = get_db()
         cur = conn.cursor()
         cur.execute("DELETE FROM photos")
@@ -560,7 +559,7 @@ def admin_purge_photos():
 
 
 # =========================
-# ✅ 템플릿 호환용 업로드 라우트
+# ✅ 템플릿 호환용 업로드 라우트 (url_for('uploaded_file') 대응)
 # =========================
 @app.route("/uploads/<item_code>/<path:filename>")
 @require_view_auth
@@ -590,7 +589,7 @@ def uploaded_file(item_code, filename):
 
 
 # =========================
-# ✅ 조회용: 전체 상품 리스트 + 필터(등록/미등록) + 엑셀
+# ✅ 조회용: 전체 상품 리스트 + 필터(등록/미등록) + 썸네일 + 엑셀
 # =========================
 @app.route("/view/products", methods=["GET"])
 @require_view_auth
@@ -606,7 +605,14 @@ def view_products():
             p.item_code,
             p.item_name,
             p.scan_code,
-            COUNT(ph.id) AS photo_count
+            COUNT(ph.id) AS photo_count,
+            (
+              SELECT ph2.s3_key
+              FROM photos ph2
+              WHERE ph2.product_item_code = p.item_code
+              ORDER BY ph2.id DESC
+              LIMIT 1
+            ) AS thumb_key
         FROM products p
         LEFT JOIN photos ph
           ON ph.product_item_code = p.item_code
@@ -637,7 +643,59 @@ def view_products():
     rows = cur.fetchall()
     conn.close()
 
-    return render_template("products_with_photos.html", rows=rows, q=q, f=f)
+    out = []
+    for r in rows:
+        d = dict(r)
+        if d.get("thumb_key"):
+            d["thumb_url"] = presigned_get_url(d["thumb_key"], expires_sec=PRESIGNED_EXPIRES)
+        else:
+            d["thumb_url"] = ""
+        out.append(d)
+
+    return render_template("products_with_photos.html", rows=out, q=q, f=f)
+
+
+@app.route("/view/product/<item_code>", methods=["GET"])
+@require_view_auth
+def view_product_detail(item_code):
+    item_code = normalize_code(item_code)
+    if not item_code:
+        abort(404)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT item_code, item_name, scan_code FROM products WHERE item_code=?", (item_code,))
+    product = cur.fetchone()
+    if not product:
+        conn.close()
+        abort(404)
+
+    cur.execute(
+        "SELECT id, filename, uploaded_at, s3_key FROM photos WHERE product_item_code=? ORDER BY id DESC",
+        (item_code,)
+    )
+    photos_rows = cur.fetchall()
+    conn.close()
+
+    photos = []
+    for r in photos_rows:
+        key = r["s3_key"] or s3_key_for(item_code, r["filename"])
+        photos.append({
+            "id": r["id"],
+            "filename": r["filename"],
+            "uploaded_at": r["uploaded_at"],
+            "url": presigned_get_url(key, expires_sec=PRESIGNED_EXPIRES),
+        })
+
+    return render_template(
+        "view_product_detail.html",
+        product=product,
+        photos=photos,
+        item_code=item_code,
+        presigned_expires=PRESIGNED_EXPIRES,
+        presigned_refresh_margin=PRESIGNED_REFRESH_MARGIN,
+    )
 
 
 @app.route("/view/export/products.xlsx", methods=["GET"])
@@ -705,7 +763,7 @@ def view_export_products_xlsx():
 
 
 # =========================
-# ✅ 등록용 화면: 상품 검색/상세/업로드
+# ✅ 등록용 화면: 상품 검색/상세/업로드/삭제
 # =========================
 @app.route("/register", methods=["GET"])
 @require_edit_auth
@@ -734,14 +792,14 @@ def register_home():
            OR p.item_name LIKE ?
         GROUP BY p.item_code, p.item_name, p.scan_code
         ORDER BY p.item_code
-        LIMIT 200
+        LIMIT 2000
         """
         cur.execute(sql, (like, like, like))
     else:
         sql = base_sql + """
         GROUP BY p.item_code, p.item_name, p.scan_code
         ORDER BY p.item_code
-        LIMIT 200
+        LIMIT 2000
         """
         cur.execute(sql)
 
