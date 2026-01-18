@@ -10,21 +10,67 @@
 
   <style>
     body { background: #f6f7fb; }
-    .app-navbar { backdrop-filter: blur(8px); background: rgba(255,255,255,0.92); border-bottom: 1px solid rgba(0,0,0,.06); }
-    .brand-badge { font-size: .75rem; color: #6c757d; }
+
+    /* ✅ 헤더(상단바) 블랙 + 화이트 텍스트 */
+    .app-navbar {
+      background: #000;
+      border-bottom: 1px solid rgba(255,255,255,.10);
+    }
+    .navbar .navbar-brand,
+    .navbar .nav-link {
+      color: rgba(255,255,255,.92) !important;
+    }
+    .navbar .nav-link:hover,
+    .navbar .nav-link:focus {
+      color: #fff !important;
+    }
+
+    /* ✅ 로고 */
+    .brand-logo { height: 28px; width: auto; display: inline-block; }
+
+    /* 기존 badge 컬러만 블랙 헤더에 맞게 조정 */
+    .brand-badge { font-size: .75rem; color: rgba(255,255,255,.65); }
+
+    /* 모바일 토글 아이콘 흰색 */
+    .navbar-toggler { border-color: rgba(255,255,255,.25); }
+    .navbar-toggler:focus { box-shadow: 0 0 0 .15rem rgba(255,255,255,.15); }
+    .navbar-toggler-icon { filter: invert(1); }
+
+    /* 기존 스타일 유지 */
     .card { border: 1px solid rgba(0,0,0,.06); border-radius: 14px; }
     .shadow-soft { box-shadow: 0 8px 24px rgba(0,0,0,.06); }
     .btn { border-radius: 12px; }
     .table thead th { font-size: .85rem; color: #6c757d; font-weight: 600; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
+    /* ✅ 블랙 헤더 위 버튼 가독성 */
+    .btn-outline-secondary.btn-sm {
+      border-color: rgba(255,255,255,.35);
+      color: rgba(255,255,255,.9);
+    }
+    .btn-outline-secondary.btn-sm:hover {
+      background: rgba(255,255,255,.12);
+      border-color: rgba(255,255,255,.55);
+      color: #fff;
+    }
+    .btn-outline-primary.btn-sm {
+      border-color: rgba(255,255,255,.55);
+      color: #fff;
+    }
+    .btn-outline-primary.btn-sm:hover {
+      background: rgba(255,255,255,.12);
+      border-color: rgba(255,255,255,.75);
+      color: #fff;
+    }
   </style>
 </head>
 
 <body>
   <nav class="navbar navbar-expand-lg app-navbar sticky-top">
     <div class="container" style="max-width: 1200px;">
-      <a class="navbar-brand fw-semibold" href="{{ url_for('gate_index') }}">
-        시세이도 <span class="brand-badge">Photo Admin</span>
+      <a class="navbar-brand fw-semibold d-flex align-items-center gap-2" href="{{ url_for('gate_index') }}">
+        <img class="brand-logo" src="{{ url_for('static', filename='img/shiseido-logo.png') }}" alt="SHISEIDO">
+        <span class="brand-badge">Photo Admin</span>
       </a>
 
       <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMain">
