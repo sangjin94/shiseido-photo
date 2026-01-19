@@ -1,70 +1,58 @@
-/* SHISEIDO PROFESSIONAL UI */
+/* =========================
+   다크 테마 가독성 보정
+========================= */
 
-:root {
-  --black: #0b0b0b;
-  --panel: #111;
-  --red: #b3001b;
-  --red-dark: #8f0015;
-  --white: #ffffff;
-  --gray: #b5b5b5;
+/* 기본 텍스트 */
+body,
+.table,
+.card,
+.form-control,
+.form-select {
+  color: #eaeaea;
 }
 
-body {
-  background: var(--black) !important;
-  color: var(--white);
-}
-
-.app-navbar {
-  background: #000 !important;
-  border-bottom: 2px solid var(--red);
-}
-
-.card {
-  background: var(--panel);
-  border: 1px solid rgba(255,255,255,0.08);
-  color: var(--white);
-}
-
-.table { color: var(--white); }
+/* 테이블 헤더 */
 .table thead th {
-  color: var(--gray);
-  border-bottom: 1px solid rgba(255,255,255,0.15);
-}
-.table-hover tbody tr:hover { background: rgba(255,255,255,0.04); }
-
-/* 버튼 – 파란색 완전 제거 */
-.btn-primary,
-.btn-outline-primary {
-  background-color: var(--red) !important;
-  border-color: var(--red) !important;
-  color: #fff !important;
-}
-.btn-primary:hover,
-.btn-outline-primary:hover {
-  background-color: var(--red-dark) !important;
-  border-color: var(--red-dark) !important;
+  color: #ffffff;
+  font-weight: 600;
+  border-color: #333;
 }
 
-.btn-outline-secondary {
-  color: #fff;
-  border-color: rgba(255,255,255,0.4);
-}
-.btn-outline-secondary:hover { background: rgba(255,255,255,0.15); }
-
-/* 썸네일 */
-.thumb-img {
-  background: #000;
-  border-radius: 8px;
-  border: 1px solid rgba(255,255,255,0.2);
+/* 테이블 바디 */
+.table tbody td {
+  color: #e0e0e0;
+  border-color: #333;
 }
 
-/* input */
-.form-control {
-  background: #000;
-  color: #fff;
-  border: 1px solid rgba(255,255,255,0.25);
+/* muted 텍스트 (기존 회색 → 밝은 회색) */
+.text-muted,
+.small.text-muted {
+  color: #b5b5b5 !important;
 }
-.form-control:focus {
-  border-color: var(--red);
-  box-shadow: 0 0 0 .15rem rgba(179,0,27,.35);
+
+/* 링크(상품코드 등) */
+a,
+.table a {
+  color: #5da9ff;
+}
+
+a:hover {
+  color: #8bc1ff;
+}
+
+/* 검색창 placeholder */
+.form-control::placeholder {
+  color: #9a9a9a;
+}
+
+/* 셀렉트 박스 */
+.form-select {
+  background-color: #111;
+  color: #eaeaea;
+  border-color: #333;
+}
+
+/* 테이블 hover */
+.table-hover tbody tr:hover {
+  background-color: #1c1c1c;
 }

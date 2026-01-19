@@ -1,204 +1,61 @@
-{# templates/product_detail.html #}
 {% extends "base.html" %}
 {% block content %}
 
-<div class="container-fluid py-3">
-
-  <!-- 상단 헤더 -->
-  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
-    <div>
-      <div class="h4 mb-1">{{ product['item_name'] or '-' }}</div>
-      <div class="text-muted small">
-        ITEM_CODE : <span class="fw-semibold">{{ product['item_code'] }}</span>
-        &nbsp;|&nbsp;
-        SCAN_CODE : <span class="fw-semibold">{{ product['scan_code'] or '-' }}</span>
-      </div>
-    </div>
-
-    <div class="d-flex gap-2">
-      <a class="btn btn-outline-secondary" href="{{ url_for('register_home') }}">
-        ← 목록
-      </a>
-      <a class="btn btn-outline-primary" href="{{ url_for('view_product_detail', item_code=product['item_code']) }}">
-        조회화면에서 보기
-      </a>
+<div class="d-flex flex-wrap justify-content-between align-items-end gap-2 mb-3">
+  <div>
+    <div class="text-muted small">등록용</div>
+    <h4 class="mb-1">{{ product['item_name'] or '-' }}</h4>
+    <div class="text-muted">
+      상품코드: <span class="fw-semibold mono">{{ product['item_code'] }}</span> |
+      바코드: <span class="fw-semibold mono">{{ product['scan_code'] or '-' }}</span>
     </div>
   </div>
 
-  <div class="row g-3">
-    <!-- 좌측: 비고 + 업로드 -->
-    <div class="col-12 col-lg-5">
-      <div class="card shadow-sm">
-        <div class="card-body p-4">
-
-          <!-- ✅ 비고 입력/저장 (등록용에서 직접 등록) -->
-          <div class="mb-4">
-            <div class="d-flex align-items-center justify-content-between">
-              <div class="fw-semibold">비고</div>
-              <span class="text-muted small">등록용에서 직접 수정 가능</span>
-            </div>
-
-            <form method="post" class="mt-2">
-              <input type="hidden" name="_action" value="save_remark">
-              <textarea
-                class="form-control"
-                name="remark"
-                rows="4"
-                placeholder="비고를 입력하세요 (예: 진열 포인트, 촬영 주의사항 등)">{{ product['remark'] or '' }}</textarea>
-
-              <button class="btn btn-primary w-100 mt-2" type="submit">
-                비고 저장
-              </button>
-            </form>
-          </div>
-
-          <hr class="my-4">
-
-          <!-- 사진 업로드 -->
-          <div class="mb-2 fw-semibold">사진 업로드 (여러 장 가능)</div>
-
-          <form method="post" enctype="multipart/form-data">
-            <input type="hidden" name="_action" value="upload_photos">
-
-            <input class="form-control" type="file" name="photos" multiple accept="image/*">
-
-            <div class="text-muted small mt-2">
-              • 업로드된 이미지는 서버에서 용량 절감을 위해 JPG로 변환되어 S3에 저장됩니다.<br>
-              • 파일명은 자동으로 <span class="fw-semibold">{{ product['item_code'] }}_001.jpg</span> 형태로 부여됩니다.
-            </div>
-
-            <button class="btn btn-success w-100 mt-3" type="submit">
-              업로드
-            </button>
-          </form>
-
-          <div class="d-grid gap-2 mt-3">
-            <a class="btn btn-outline-secondary" href="{{ url_for('register_product_detail', item_code=product['item_code']) }}">
-              새로고침
-            </a>
-          </div>
-
-        </div>
-      </div>
-    </div>
-
-    <!-- 우측: 사진 리스트 -->
-    <div class="col-12 col-lg-7">
-      <div class="card shadow-sm">
-        <div class="card-body p-4">
-          <div class="d-flex align-items-center justify-content-between mb-3">
-            <div class="fw-semibold">
-              등록된 사진
-              <span class="text-muted">({{ photos|length }})</span>
-            </div>
-
-            <div class="text-muted small">
-              썸네일/정렬 기준은 서버에서 결정됩니다.
-            </div>
-          </div>
-
-          {% if photos|length == 0 %}
-            <div class="alert alert-light border mb-0">
-              아직 등록된 사진이 없습니다.
-            </div>
-          {% else %}
-
-            <!-- 그리드 -->
-            <div class="row g-3">
-              {% for p in photos %}
-              <div class="col-12 col-md-6">
-                <div class="border rounded-3 overflow-hidden h-100">
-                  <div class="ratio ratio-4x3 bg-light">
-                    <img
-                      src="{{ p['url'] }}"
-                      alt="{{ p['filename'] }}"
-                      style="width:100%; height:100%; object-fit:cover;"
-                      loading="lazy"
-                      data-bs-toggle="modal"
-                      data-bs-target="#photoModal"
-                      data-full="{{ p['url'] }}"
-                      data-filename="{{ p['filename'] }}"
-                    >
-                  </div>
-
-                  <div class="p-3">
-                    <div class="d-flex align-items-start justify-content-between gap-2">
-                      <div>
-                        <div class="fw-semibold">{{ p['filename'] }}</div>
-                        <div class="text-muted small">{{ p['uploaded_at'] }}</div>
-                      </div>
-
-                      <form method="post" action="{{ url_for('register_delete_photo', photo_id=p['id']) }}"
-                            onsubmit="return confirm('이 사진을 삭제할까요?');">
-                        <button class="btn btn-sm btn-outline-danger" type="submit">
-                          삭제
-                        </button>
-                      </form>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              {% endfor %}
-            </div>
-
-          {% endif %}
-        </div>
-      </div>
-    </div>
+  <div class="d-flex gap-2">
+    <a class="btn btn-outline-secondary" href="{{ url_for('register_home') }}">← 목록</a>
   </div>
 </div>
 
-<!-- ✅ 사진 확대 모달 -->
-<div class="modal fade" id="photoModal" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog modal-xl modal-dialog-centered">
-    <div class="modal-content">
-      <div class="modal-header">
-        <div class="fw-semibold" id="photoModalTitle">사진</div>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-      </div>
+<div class="card p-3 shadow-soft mb-4">
+  <form method="post" enctype="multipart/form-data">
+    <div class="mb-2 fw-semibold">사진 업로드</div>
+    <div class="input-group">
+      <input type="file" class="form-control" name="photos" multiple accept="image/*" required>
+      <button class="btn btn-primary" type="submit">업로드</button>
+    </div>
+    <div class="form-text">
+      여러 장 선택 가능 · JPG/PNG/WebP 지원 · 자동 압축 저장(S3)
+    </div>
+  </form>
+</div>
 
-      <div class="modal-body">
-        <div class="text-center">
-          <img id="photoModalImg" src="" alt="" style="max-width:100%; max-height:75vh;">
-        </div>
-      </div>
-
-      <div class="modal-footer">
-        <a id="photoModalOpenNew" class="btn btn-outline-primary" href="#" target="_blank" rel="noopener">
-          원본 새 창으로 열기
-        </a>
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">닫기</button>
+<div class="row g-3">
+  {% for ph in photos %}
+  <div class="col-6 col-sm-4 col-md-3 col-lg-2">
+    <div class="card shadow-soft h-100">
+      <a href="{{ ph['url'] }}" target="_blank">
+        <img src="{{ ph['url'] }}" class="card-img-top" style="object-fit:cover; aspect-ratio:1/1;">
+      </a>
+      <div class="card-body p-2">
+        <div class="small text-muted text-truncate">{{ ph['filename'] }}</div>
+        <form method="post"
+              action="{{ url_for('register_delete_photo', photo_id=ph['id']) }}"
+              onsubmit="return confirm('이 사진을 삭제하시겠습니까?');">
+          <button class="btn btn-sm btn-outline-danger w-100 mt-1">삭제</button>
+        </form>
       </div>
     </div>
   </div>
+  {% endfor %}
+
+  {% if not photos %}
+  <div class="col-12">
+    <div class="card p-5 text-center shadow-soft">
+      <div class="fw-semibold mb-1">등록된 사진이 없습니다</div>
+      <div class="text-muted">위에서 사진을 업로드해 주세요.</div>
+    </div>
+  </div>
+  {% endif %}
 </div>
-
-<script>
-  (function () {
-    const modal = document.getElementById("photoModal");
-    if (!modal) return;
-
-    const imgEl = document.getElementById("photoModalImg");
-    const titleEl = document.getElementById("photoModalTitle");
-    const openNewEl = document.getElementById("photoModalOpenNew");
-
-    modal.addEventListener("show.bs.modal", function (event) {
-      const trigger = event.relatedTarget;
-      if (!trigger) return;
-
-      const url = trigger.getAttribute("data-full") || "";
-      const filename = trigger.getAttribute("data-filename") || "사진";
-
-      if (imgEl) imgEl.src = url;
-      if (imgEl) imgEl.alt = filename;
-      if (titleEl) titleEl.textContent = filename;
-      if (openNewEl) openNewEl.href = url;
-    });
-
-    modal.addEventListener("hidden.bs.modal", function () {
-      if (imgEl) imgEl.src = "";
-    });
-  })();
-</script>
 
 {% endblock %}
