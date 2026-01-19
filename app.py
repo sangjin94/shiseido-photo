@@ -734,11 +734,12 @@ def view_products():
             p.remark,
             COUNT(ph.id) AS photo_count,
             (
-              SELECT ph2.s3_key
-              FROM photos ph2
-              WHERE ph2.product_item_code = p.item_code
-              ORDER BY ph2.id DESC
-              LIMIT 1
+                SELECT ph2.s3_key
+                FROM photos ph2
+                WHERE ph2.product_item_code = p.item_code
+                ORDER BY ph2.filename ASC
+                LIMIT 1
+
             ) AS thumb_key
         FROM products p
         LEFT JOIN photos ph
