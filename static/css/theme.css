@@ -4,63 +4,77 @@
 ========================= */
 
 /* =========================
-   기본 텍스트
+   기본 배경
 ========================= */
-body,
-.table,
-.card,
-.form-control,
-.form-select {
-  color: #f2f2f2; /* 기본은 흰색 계열 */
+body {
+  color: #f2f2f2;
   background-color: #0d0d0d;
 }
 
 /* =========================
-   헤더 (검정 + 빨간 라인)
+   공통 텍스트
+========================= */
+.table,
+.card,
+.form-control,
+.form-select {
+  color: #f2f2f2;
+}
+
+/* =========================
+   헤더 / 네비게이션
 ========================= */
 header,
 .navbar,
 .card-header,
 .table thead {
   background-color: #000000;
-  border-bottom: 2px solid #b11212; /* 빨간 포인트 라인 */
+  border-bottom: 2px solid #b11212;
+}
+
+.navbar .nav-link,
+.navbar-brand,
+.navbar-brand span {
+  color: #ffffff;
+}
+
+.navbar .nav-link:hover {
+  color: #e6c76a;
 }
 
 /* =========================
-   테이블 헤더
+   테이블
 ========================= */
 .table thead th {
-  color: #f5d77a; /* 골드 */
+  color: #f5d77a;
   font-weight: 600;
   border-color: #2a2a2a;
 }
 
-/* =========================
-   테이블 바디
-========================= */
 .table tbody td {
-  color: #ffffff; /* 본문은 흰색 → 가독성 최우선 */
+  color: #ffffff;
   border-color: #2a2a2a;
 }
 
+.table-hover tbody tr:hover {
+  background-color: #161616;
+}
+
 /* =========================
-   강조 텍스트 (금색)
+   강조 / 보조 텍스트
 ========================= */
 .text-gold {
   color: #e6c76a;
   font-weight: 600;
 }
 
-/* =========================
-   muted 텍스트 (은은한 골드)
-========================= */
 .text-muted,
 .small.text-muted {
-  color: #c7b56a !important;
+  color: #b8b1a0 !important;
 }
 
 /* =========================
-   링크 (금색 → hover 시 밝은 골드)
+   링크
 ========================= */
 a,
 .table a {
@@ -73,7 +87,7 @@ a:hover {
 }
 
 /* =========================
-   입력창 / 셀렉트
+   입력 요소
 ========================= */
 .form-control,
 .form-select {
@@ -87,13 +101,6 @@ a:hover {
 }
 
 /* =========================
-   테이블 hover
-========================= */
-.table-hover tbody tr:hover {
-  background-color: #161616;
-}
-
-/* =========================
    카드
 ========================= */
 .card {
@@ -102,7 +109,7 @@ a:hover {
 }
 
 /* =========================
-   버튼 (골드 포인트)
+   버튼 (골드)
 ========================= */
 .btn-gold {
   background-color: #e6c76a;

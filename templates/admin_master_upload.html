@@ -2,25 +2,47 @@
 {% block title %}관리 · 마스터 업로드{% endblock %}
 {% block content %}
 
-<div class="card" style="max-width:720px; margin: 10px auto;">
-  <div class="card-title">마스터 엑셀 업로드</div>
-  <div class="subtle">
-    필수 컬럼: <b>ITEM_CODE</b>, <b>ITEM_NAME</b>, <b>SCAN_CODE</b><br>
-    선택 컬럼: <b>REMARK</b> (비고)
+<div class="card p-4 shadow-soft" style="max-width:720px; margin: 20px auto;">
+
+  <div class="mb-3">
+    <div class="text-muted small">관리자 전용</div>
+    <h4 class="mb-1 text-white">마스터 엑셀 업로드</h4>
+    <div class="text-muted">
+      필수 컬럼:
+      <span class="text-gold fw-semibold">ITEM_CODE</span>,
+      <span class="text-gold fw-semibold">ITEM_NAME</span>,
+      <span class="text-gold fw-semibold">SCAN_CODE</span><br>
+      선택 컬럼:
+      <span class="text-gold fw-semibold">REMARK</span> (비고)
+    </div>
   </div>
 
-  <div style="height:14px"></div>
-
-  <form method="post" enctype="multipart/form-data">
-    <div class="field">
-      <label>엑셀 파일 선택</label>
-      <input class="input" type="file" name="master" accept=".xlsx,.xls">
+  <form method="post" enctype="multipart/form-data" class="mt-3">
+    <div class="mb-3">
+      <label class="form-label text-white">엑셀 파일 선택</label>
+      <input
+        type="file"
+        class="form-control"
+        name="master"
+        accept=".xlsx,.xls"
+        required
+      >
     </div>
-    <button class="btn btn-red" style="width:100%;">업로드 & 업데이트</button>
+
+    <button type="submit" class="btn btn-gold w-100">
+      업로드 및 마스터 업데이트
+    </button>
   </form>
 
-  <div style="height:12px"></div>
-  <a class="btn btn-ghost" style="width:100%;" href="{{ url_for('register_home') }}">등록 화면으로</a>
+  <div class="mt-3">
+    <a
+      href="{{ url_for('register_home') }}"
+      class="btn btn-outline-light w-100"
+    >
+      ← 등록 화면으로 돌아가기
+    </a>
+  </div>
+
 </div>
 
 {% endblock %}
