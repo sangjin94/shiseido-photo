@@ -45,7 +45,7 @@ AUTO_LOAD_MASTER = os.environ.get("AUTO_LOAD_MASTER", "1").strip()  # "1" or "0"
 # ✅ 업로드 용량 제한(바이트) - 기본 20MB
 MAX_CONTENT_LENGTH = int(os.environ.get("MAX_CONTENT_LENGTH", str(20 * 1024 * 1024)))
 
-# ✅ 관리자 삭제 토큰(선택) - 설정하면 /admin/purge_photos 사용 가능
+# ✅ 관리자 전체 삭제 토큰(선택) - 설정하면 /admin/purge_photos 사용 가능
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "").strip()
 
 # ✅ 모드별 암호키(필수)
@@ -296,8 +296,17 @@ def presigned_get_url(key: str, expires_sec: int = None) -> str:
     )
 
 
+def _has_column(conn: sqlite3.Connection, table: str, col: str) -> bool:
+    cur = conn.cursor()
+    rows = cur.execute(f"PRAGMA table_info({table})").fetchall()
+    for r in rows:
+        if str(r[1]).lower() == col.lower():
+            return True
+    return False
+
+
 # =========================
-# DB 초기화
+# DB 초기화 (+ 마이그레이션)
 # =========================
 def init_db():
     conn = get_db()
@@ -312,6 +321,10 @@ def init_db():
         )
         """
     )
+
+    # ✅ 비고(remark) 컬럼 마이그레이션
+    if not _has_column(conn, "products", "remark"):
+        cur.execute("ALTER TABLE products ADD COLUMN remark TEXT")
 
     cur.execute(
         """
@@ -333,38 +346,66 @@ def init_db():
 # =========================
 # 마스터 적재
 # =========================
+def _read_master_df_from_xlsx(path: str) -> pd.DataFrame:
+    df = pd.read_excel(path)
+    df.columns = df.columns.astype(str).str.strip()
+
+    required = ["ITEM_CODE", "ITEM_NAME", "SCAN_CODE"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"마스터 엑셀에 필수 컬럼이 없습니다: {missing}\n현재 컬럼: {list(df.columns)}")
+
+    # ✅ REMARK(비고) 컬럼은 선택
+    cols = required + (["REMARK"] if "REMARK" in df.columns else [])
+    df = df[cols].copy()
+
+    for col in cols:
+        df[col] = df[col].fillna("").astype(str).str.strip()
+
+    df = df[df["ITEM_CODE"] != ""]
+    return df
+
+
 def load_master_excel():
     if not Path(MASTER_XLSX_PATH).exists():
         raise FileNotFoundError(f"마스터 파일이 없습니다: {MASTER_XLSX_PATH}")
 
-    df = pd.read_excel(MASTER_XLSX_PATH)
-    df.columns = df.columns.astype(str).str.strip()
-
-    REQUIRED_COLUMNS = ["ITEM_CODE", "ITEM_NAME", "SCAN_CODE"]
-    missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
-    if missing:
-        raise ValueError(f"마스터 엑셀에 필수 컬럼이 없습니다: {missing}\n현재 컬럼: {list(df.columns)}")
-
-    df = df[REQUIRED_COLUMNS].copy()
-    for col in REQUIRED_COLUMNS:
-        df[col] = df[col].fillna("").astype(str).str.strip()
-    df = df[df["ITEM_CODE"] != ""]
+    df = _read_master_df_from_xlsx(MASTER_XLSX_PATH)
 
     conn = get_db()
     cur = conn.cursor()
 
+    has_remark = "REMARK" in df.columns
     for _, row in df.iterrows():
         item_code = normalize_code(row["ITEM_CODE"])
         item_name = normalize_code(row["ITEM_NAME"])
         scan_code = normalize_code(row["SCAN_CODE"])
+        remark = normalize_code(row["REMARK"]) if has_remark else ""
 
-        cur.execute(
-            """
-            INSERT OR REPLACE INTO products (item_code, item_name, scan_code)
-            VALUES (?, ?, ?)
-            """,
-            (item_code, item_name, scan_code)
-        )
+        if has_remark:
+            cur.execute(
+                """
+                INSERT INTO products (item_code, item_name, scan_code, remark)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(item_code) DO UPDATE SET
+                  item_name=excluded.item_name,
+                  scan_code=excluded.scan_code,
+                  remark=excluded.remark
+                """,
+                (item_code, item_name, scan_code, remark)
+            )
+        else:
+            # remark는 기존 값 유지
+            cur.execute(
+                """
+                INSERT INTO products (item_code, item_name, scan_code)
+                VALUES (?, ?, ?)
+                ON CONFLICT(item_code) DO UPDATE SET
+                  item_name=excluded.item_name,
+                  scan_code=excluded.scan_code
+                """,
+                (item_code, item_name, scan_code)
+            )
 
     conn.commit()
     conn.close()
@@ -559,6 +600,91 @@ def admin_purge_photos():
 
 
 # =========================
+# ✅ 마스터 엑셀 업로드로 업데이트
+#    - 등록 모드(require_edit_auth) 로그인만 하면 사용 가능
+# =========================
+@app.route("/admin/master_upload", methods=["GET", "POST"])
+@require_edit_auth
+def admin_master_upload():
+    if request.method == "POST":
+        f = request.files.get("master")
+        if not f or not f.filename:
+            flash("업로드할 엑셀 파일을 선택해 주세요.", "warning")
+            return redirect(url_for("admin_master_upload"))
+
+        name = f.filename.lower()
+        if not (name.endswith(".xlsx") or name.endswith(".xls")):
+            flash("엑셀 파일(xlsx/xls)만 업로드할 수 있습니다.", "danger")
+            return redirect(url_for("admin_master_upload"))
+
+        try:
+            df = pd.read_excel(f)
+            df.columns = df.columns.astype(str).str.strip()
+
+            required = ["ITEM_CODE", "ITEM_NAME", "SCAN_CODE"]
+            missing = [c for c in required if c not in df.columns]
+            if missing:
+                flash(f"필수 컬럼 누락: {missing} / 현재 컬럼: {list(df.columns)}", "danger")
+                return redirect(url_for("admin_master_upload"))
+
+            has_remark = "REMARK" in df.columns
+            cols = required + (["REMARK"] if has_remark else [])
+            df = df[cols].copy()
+
+            for col in cols:
+                df[col] = df[col].fillna("").astype(str).str.strip()
+
+            df = df[df["ITEM_CODE"] != ""]
+
+            conn = get_db()
+            cur = conn.cursor()
+
+            upserted = 0
+            for _, row in df.iterrows():
+                item_code = normalize_code(row["ITEM_CODE"])
+                item_name = normalize_code(row["ITEM_NAME"])
+                scan_code = normalize_code(row["SCAN_CODE"])
+                remark = normalize_code(row["REMARK"]) if has_remark else ""
+
+                if has_remark:
+                    cur.execute(
+                        """
+                        INSERT INTO products (item_code, item_name, scan_code, remark)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(item_code) DO UPDATE SET
+                          item_name=excluded.item_name,
+                          scan_code=excluded.scan_code,
+                          remark=excluded.remark
+                        """,
+                        (item_code, item_name, scan_code, remark)
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO products (item_code, item_name, scan_code)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(item_code) DO UPDATE SET
+                          item_name=excluded.item_name,
+                          scan_code=excluded.scan_code
+                        """,
+                        (item_code, item_name, scan_code)
+                    )
+                upserted += 1
+
+            conn.commit()
+            conn.close()
+
+            flash(f"마스터 업데이트 완료: {upserted}건 반영", "success")
+            return redirect(url_for("register_home"))
+
+        except Exception as e:
+            flash(f"업로드/검증 실패: {e}", "danger")
+            return redirect(url_for("admin_master_upload"))
+
+    return render_template("admin_master_upload.html")
+
+
+# =========================
 # ✅ 템플릿 호환용 업로드 라우트 (url_for('uploaded_file') 대응)
 # =========================
 @app.route("/uploads/<item_code>/<path:filename>")
@@ -580,9 +706,9 @@ def uploaded_file(item_code, filename):
     if not row:
         abort(404)
 
-    s3_key = row["s3_key"]
-    if s3_key:
-        return redirect(presigned_get_url(s3_key, expires_sec=PRESIGNED_EXPIRES))
+    s3_key_ = row["s3_key"]
+    if s3_key_:
+        return redirect(presigned_get_url(s3_key_, expires_sec=PRESIGNED_EXPIRES))
 
     uploads_dir = BASE_DIR / "static" / "uploads" / item_code
     return send_from_directory(str(uploads_dir), filename)
@@ -605,6 +731,7 @@ def view_products():
             p.item_code,
             p.item_name,
             p.scan_code,
+            p.remark,
             COUNT(ph.id) AS photo_count,
             (
               SELECT ph2.s3_key
@@ -623,21 +750,22 @@ def view_products():
 
     if q:
         like = f"%{q}%"
-        where.append("(p.item_code LIKE ? OR p.scan_code LIKE ? OR p.item_name LIKE ?)")
-        params.extend([like, like, like])
+        where.append("(p.item_code LIKE ? OR p.scan_code LIKE ? OR p.item_name LIKE ? OR p.remark LIKE ?)")
+        params.extend([like, like, like, like])
 
     sql = base_sql
     if where:
         sql += " WHERE " + " AND ".join(where)
 
-    sql += " GROUP BY p.item_code, p.item_name, p.scan_code "
+    sql += " GROUP BY p.item_code, p.item_name, p.scan_code, p.remark "
 
     if f == "has":
         sql += " HAVING COUNT(ph.id) > 0 "
     elif f == "none":
         sql += " HAVING COUNT(ph.id) = 0 "
 
-    sql += " ORDER BY p.item_code LIMIT 2000 "
+    # ✅ 등록(사진 있는) 상품이 항상 위로
+    sql += " ORDER BY photo_count DESC, p.item_code ASC LIMIT 2000 "
 
     cur.execute(sql, params)
     rows = cur.fetchall()
@@ -665,7 +793,7 @@ def view_product_detail(item_code):
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("SELECT item_code, item_name, scan_code FROM products WHERE item_code=?", (item_code,))
+    cur.execute("SELECT item_code, item_name, scan_code, remark FROM products WHERE item_code=?", (item_code,))
     product = cur.fetchone()
     if not product:
         conn.close()
@@ -712,6 +840,7 @@ def view_export_products_xlsx():
             p.item_name AS 상품명,
             p.item_code AS 상품코드,
             p.scan_code AS 스캔바코드,
+            IFNULL(p.remark, '') AS 비고,
             COUNT(ph.id) AS 사진수
         FROM products p
         LEFT JOIN photos ph
@@ -723,21 +852,21 @@ def view_export_products_xlsx():
 
     if q:
         like = f"%{q}%"
-        where.append("(p.item_code LIKE ? OR p.scan_code LIKE ? OR p.item_name LIKE ?)")
-        params.extend([like, like, like])
+        where.append("(p.item_code LIKE ? OR p.scan_code LIKE ? OR p.item_name LIKE ? OR p.remark LIKE ?)")
+        params.extend([like, like, like, like])
 
     sql = base_sql
     if where:
         sql += " WHERE " + " AND ".join(where)
 
-    sql += " GROUP BY p.item_name, p.item_code, p.scan_code "
+    sql += " GROUP BY p.item_name, p.item_code, p.scan_code, p.remark "
 
     if f == "has":
         sql += " HAVING COUNT(ph.id) > 0 "
     elif f == "none":
         sql += " HAVING COUNT(ph.id) = 0 "
 
-    sql += " ORDER BY 상품코드 "
+    sql += " ORDER BY 사진수 DESC, 상품코드 ASC "
 
     cur.execute(sql, params)
     data = cur.fetchall()
@@ -778,31 +907,32 @@ def register_home():
             p.item_code,
             p.item_name,
             p.scan_code,
+            p.remark,
             COUNT(ph.id) AS photo_count
         FROM products p
         LEFT JOIN photos ph
           ON ph.product_item_code = p.item_code
     """
 
+    where = []
+    params = []
+
     if q:
         like = f"%{q}%"
-        sql = base_sql + """
-        WHERE p.item_code LIKE ?
-           OR p.scan_code LIKE ?
-           OR p.item_name LIKE ?
-        GROUP BY p.item_code, p.item_name, p.scan_code
-        ORDER BY p.item_code
-        LIMIT 2000
-        """
-        cur.execute(sql, (like, like, like))
-    else:
-        sql = base_sql + """
-        GROUP BY p.item_code, p.item_name, p.scan_code
-        ORDER BY p.item_code
-        LIMIT 2000
-        """
-        cur.execute(sql)
+        where.append("(p.item_code LIKE ? OR p.scan_code LIKE ? OR p.item_name LIKE ? OR p.remark LIKE ?)")
+        params.extend([like, like, like, like])
 
+    sql = base_sql
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+
+    sql += """
+        GROUP BY p.item_code, p.item_name, p.scan_code, p.remark
+        ORDER BY photo_count DESC, p.item_code ASC
+        LIMIT 2000
+    """
+
+    cur.execute(sql, params)
     products = cur.fetchall()
     conn.close()
     return render_template("home.html", products=products, q=q)
@@ -818,21 +948,35 @@ def register_product_detail(item_code):
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("SELECT item_code, item_name, scan_code FROM products WHERE item_code = ?", (item_code,))
+    cur.execute("SELECT item_code, item_name, scan_code, remark FROM products WHERE item_code = ?", (item_code,))
     product = cur.fetchone()
     if not product:
         conn.close()
         flash("해당 상품을 찾을 수 없습니다. (마스터에 없는 상품코드)", "warning")
         return redirect(url_for("register_home"))
 
-    if request.method == "POST":
+    action = (request.form.get("_action", "") or "").strip()
+
+    # ✅ 비고 저장
+    if request.method == "POST" and action == "save_remark":
+        remark = (request.form.get("remark", "") or "").strip()
+        cur.execute("UPDATE products SET remark=? WHERE item_code=?", (remark, item_code))
+        conn.commit()
+        conn.close()
+        flash("비고 저장 완료", "success")
+        return redirect(url_for("register_product_detail", item_code=item_code))
+
+    # ✅ 사진 업로드
+    if request.method == "POST" and action in ("", "upload_photos"):
         if "photos" not in request.files:
             flash("업로드할 파일이 없습니다. (폼 enctype='multipart/form-data' 확인)", "danger")
+            conn.close()
             return redirect(url_for("register_product_detail", item_code=item_code))
 
         files = request.files.getlist("photos")
         if not files or all(not f.filename for f in files):
             flash("파일을 선택해 주세요.", "warning")
+            conn.close()
             return redirect(url_for("register_product_detail", item_code=item_code))
 
         saved_count = 0
@@ -868,7 +1012,10 @@ def register_product_detail(item_code):
         conn.close()
         return redirect(url_for("register_product_detail", item_code=item_code))
 
-    # GET: 사진 목록 + presigned
+    # GET
+    cur.execute("SELECT item_code, item_name, scan_code, remark FROM products WHERE item_code = ?", (item_code,))
+    product = cur.fetchone()
+
     cur.execute(
         "SELECT id, filename, uploaded_at, s3_key FROM photos WHERE product_item_code = ? ORDER BY id DESC",
         (item_code,)

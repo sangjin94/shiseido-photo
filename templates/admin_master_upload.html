@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}관리 · 마스터 업로드{% endblock %}
+{% block content %}
+
+<div class="card" style="max-width:720px; margin: 10px auto;">
+  <div class="card-title">마스터 엑셀 업로드</div>
+  <div class="subtle">
+    필수 컬럼: <b>ITEM_CODE</b>, <b>ITEM_NAME</b>, <b>SCAN_CODE</b><br>
+    선택 컬럼: <b>REMARK</b> (비고)
+  </div>
+
+  <div style="height:14px"></div>
+
+  <form method="post" enctype="multipart/form-data">
+    <div class="field">
+      <label>엑셀 파일 선택</label>
+      <input class="input" type="file" name="master" accept=".xlsx,.xls">
+    </div>
+    <button class="btn btn-red" style="width:100%;">업로드 & 업데이트</button>
+  </form>
+
+  <div style="height:12px"></div>
+  <a class="btn btn-ghost" style="width:100%;" href="{{ url_for('register_home') }}">등록 화면으로</a>
+</div>
+
+{% endblock %}
