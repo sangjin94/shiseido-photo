@@ -758,14 +758,19 @@ def view_products():
             p.scan_code,
             p.remark,
             COUNT(ph.id) AS photo_count,
-            (
-                    SELECT ph2.s3_key
-                    FROM photos ph2
-                    WHERE ph2.product_item_code = p.item_code
-                    ORDER BY ph2.uploaded_at ASC, ph2.id ASC
-                    LIMIT 1
+                (
+                        SELECT
+                          CASE
+                            WHEN ph2.s3_key IS NOT NULL AND ph2.s3_key <> '' THEN ph2.s3_key
+                            ELSE ('products/' || p.item_code || '/' || ph2.filename)
+                          END
+                        FROM photos ph2
+                        WHERE ph2.product_item_code = p.item_code
+                        ORDER BY ph2.uploaded_at ASC, ph2.id ASC
+                        LIMIT 1
+                
+                ) AS thumb_key
 
-            ) AS thumb_key
         FROM products p
         LEFT JOIN photos ph
           ON ph.product_item_code = p.item_code
