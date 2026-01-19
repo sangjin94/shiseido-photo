@@ -1,10 +1,70 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>$Title$</title>
-</head>
-<body>
-$END$
-</body>
-</html>
+/* SHISEIDO PROFESSIONAL UI */
+
+:root {
+  --black: #0b0b0b;
+  --panel: #111;
+  --red: #b3001b;
+  --red-dark: #8f0015;
+  --white: #ffffff;
+  --gray: #b5b5b5;
+}
+
+body {
+  background: var(--black) !important;
+  color: var(--white);
+}
+
+.app-navbar {
+  background: #000 !important;
+  border-bottom: 2px solid var(--red);
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: var(--white);
+}
+
+.table { color: var(--white); }
+.table thead th {
+  color: var(--gray);
+  border-bottom: 1px solid rgba(255,255,255,0.15);
+}
+.table-hover tbody tr:hover { background: rgba(255,255,255,0.04); }
+
+/* 버튼 – 파란색 완전 제거 */
+.btn-primary,
+.btn-outline-primary {
+  background-color: var(--red) !important;
+  border-color: var(--red) !important;
+  color: #fff !important;
+}
+.btn-primary:hover,
+.btn-outline-primary:hover {
+  background-color: var(--red-dark) !important;
+  border-color: var(--red-dark) !important;
+}
+
+.btn-outline-secondary {
+  color: #fff;
+  border-color: rgba(255,255,255,0.4);
+}
+.btn-outline-secondary:hover { background: rgba(255,255,255,0.15); }
+
+/* 썸네일 */
+.thumb-img {
+  background: #000;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.2);
+}
+
+/* input */
+.form-control {
+  background: #000;
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.25);
+}
+.form-control:focus {
+  border-color: var(--red);
+  box-shadow: 0 0 0 .15rem rgba(179,0,27,.35);
+}
