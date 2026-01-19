@@ -18,7 +18,7 @@
     <div class="row g-2 align-items-center">
       <div class="col-12 col-md-7">
         <div class="input-group">
-          <input type="text" class="form-control" name="q" value="{{ q }}" placeholder="상품명/상품코드/바코드 검색">
+          <input type="text" class="form-control" name="q" value="{{ q }}" placeholder="상품명/상품코드/바코드/비고 검색">
           <button class="btn btn-outline-primary" type="submit">검색</button>
           <a class="btn btn-outline-secondary" href="{{ url_for('view_products') }}">초기화</a>
         </div>
@@ -53,6 +53,7 @@
                   </div>
                 {% endif %}
               </div>
+
               <div class="flex-grow-1">
                 <div class="fw-semibold mono">{{ r['item_code'] }}</div>
                 <div class="small {% if has_photo %}text-success{% else %}text-muted{% endif %}">
@@ -60,7 +61,16 @@
                 </div>
                 <div class="mt-1">{{ r['item_name'] or '-' }}</div>
                 <div class="text-muted small mono">{{ r['scan_code'] or '-' }}</div>
+
+                <!-- ✅ 비고 표시 추가 -->
+                {% if r['remark'] %}
+                  <div class="mt-1 small text-muted">
+                    <span class="fw-semibold">비고:</span>
+                    <span>{{ r['remark'] }}</span>
+                  </div>
+                {% endif %}
               </div>
+
               <div class="text-end">
                 {% if has_photo %}
                   <span class="badge text-bg-success">등록</span>
@@ -97,6 +107,7 @@
             <th style="min-width:170px;">상품코드</th>
             <th>상품명</th>
             <th style="min-width:180px;">스캔바코드</th>
+            <th style="min-width:260px;">비고</th>
           </tr>
         </thead>
         <tbody>
@@ -112,6 +123,7 @@
                   <span class="text-muted small">-</span>
                 {% endif %}
               </td>
+
               <td>
                 <a class="text-decoration-none fw-semibold mono"
                    href="{{ url_for('view_product_detail', item_code=r['item_code']) }}">
@@ -121,8 +133,18 @@
                   {% if has_photo %}(사진등록){% else %}(미등록){% endif %}
                 </div>
               </td>
+
               <td>{{ r['item_name'] or '-' }}</td>
               <td class="mono">{{ r['scan_code'] or '-' }}</td>
+
+              <!-- ✅ 비고 표시 추가 -->
+              <td class="text-muted">
+                {% if r['remark'] %}
+                  {{ r['remark'] }}
+                {% else %}
+                  <span class="text-muted">-</span>
+                {% endif %}
+              </td>
             </tr>
           {% endfor %}
         </tbody>

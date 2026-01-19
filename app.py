@@ -20,6 +20,9 @@ import boto3
 from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 
+# ✅ 프록시(nginx) 뒤에서 scheme/host 인식 안정화용
+from werkzeug.middleware.proxy_fix import ProxyFix
+
 
 # =========================
 # ✅ .env 로드 (로컬용) — 서버에서는 환경변수로 주입해도 됨
@@ -51,6 +54,12 @@ ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "").strip()
 # ✅ 모드별 암호키(필수)
 VIEW_PASSWORD = os.environ.get("VIEW_PASSWORD", "").strip()   # 조회용
 EDIT_PASSWORD = os.environ.get("EDIT_PASSWORD", "").strip()   # 등록용
+
+# ✅ 배포/로컬 디버그 전환 (기본 False)
+FLASK_DEBUG = os.environ.get("FLASK_DEBUG", "0").strip() == "1"
+
+# ✅ 배포 환경 쿠키 보안 옵션 (https면 1 권장)
+COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "1").strip() == "1"
 
 if not all([S3_BUCKET, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]):
     raise SystemExit(
@@ -90,6 +99,17 @@ JPEG_QUALITY = 65
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
+
+# ✅ 프록시(nginx) 뒤에서 url_for/redirect 스킴(http/https) 꼬임 방지
+# nginx에서 X-Forwarded-Proto, X-Forwarded-For 헤더를 세팅해주는 구성일 때 효과
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
+# ✅ 세션/쿠키 보안(배포 안정화)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=COOKIE_SECURE,  # https면 True 권장
+)
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -154,6 +174,12 @@ def logout():
     session.pop("auth_edit", None)
     flash("로그아웃 완료", "success")
     return redirect(url_for("gate_index"))
+
+
+# ✅ 헬스체크 (로드밸런서/모니터링/배포 확인용)
+@app.get("/healthz")
+def healthz():
+    return jsonify({"ok": True, "ts": datetime.now().isoformat(timespec="seconds")})
 
 
 # =========================
@@ -601,7 +627,6 @@ def admin_purge_photos():
 
 # =========================
 # ✅ 마스터 엑셀 업로드로 업데이트
-#    - 등록 모드(require_edit_auth) 로그인만 하면 사용 가능
 # =========================
 @app.route("/admin/master_upload", methods=["GET", "POST"])
 @require_edit_auth
@@ -734,11 +759,11 @@ def view_products():
             p.remark,
             COUNT(ph.id) AS photo_count,
             (
-                SELECT ph2.s3_key
-                FROM photos ph2
-                WHERE ph2.product_item_code = p.item_code
-                ORDER BY ph2.filename ASC
-                LIMIT 1
+                    SELECT ph2.s3_key
+                    FROM photos ph2
+                    WHERE ph2.product_item_code = p.item_code
+                    ORDER BY ph2.uploaded_at ASC, ph2.id ASC
+                    LIMIT 1
 
             ) AS thumb_key
         FROM products p
@@ -1099,7 +1124,12 @@ def main_cli():
         print("[OK] master loaded.")
         return
 
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")), debug=True)
+    # ✅ 배포에서는 gunicorn이 실행하므로 여기 run은 로컬 개발용으로만
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", "5000")),
+        debug=FLASK_DEBUG
+    )
 
 
 if __name__ == "__main__":
