@@ -122,3 +122,21 @@ a:hover {
   background-color: #ffe8a3;
   color: #000;
 }
+/* =========================
+   테이블 배경(화이트 방지) 강제 다크
+========================= */
+.table,
+.table > :not(caption) > * > * {
+  background-color: #0f0f0f !important;
+  color: #ffffff !important;
+  border-color: #2a2a2a !important;
+}
+
+.table thead th {
+  background-color: #000000 !important;
+  color: #f5d77a !important;
+}
+
+.table tbody tr:hover > * {
+  background-color: #161616 !important;
+}
