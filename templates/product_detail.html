@@ -17,8 +17,11 @@
   </div>
 </div>
 
+<!-- ✅ 사진 업로드 (upload_photos 액션 지정) -->
 <div class="card p-3 shadow-soft mb-4">
   <form method="post" enctype="multipart/form-data">
+    <input type="hidden" name="_action" value="upload_photos">
+
     <div class="mb-2 fw-semibold text-white">사진 업로드</div>
     <div class="input-group">
       <input type="file" class="form-control" name="photos" multiple accept="image/*" required>
@@ -27,6 +30,24 @@
     <div class="form-text text-muted">
       여러 장 선택 가능 · JPG/PNG/WebP 지원 · 자동 압축 저장(S3)
     </div>
+  </form>
+</div>
+
+<!-- ✅ 비고 저장 (save_remark 액션) -->
+<div class="card p-3 shadow-soft mb-3">
+  <form method="post">
+    <input type="hidden" name="_action" value="save_remark">
+
+    <div class="d-flex justify-content-between align-items-end gap-2 mb-2">
+      <div>
+        <div class="text-gold small">비고</div>
+        <div class="text-muted small">조회 화면에도 동일하게 표시됩니다.</div>
+      </div>
+      <button class="btn btn-gold" type="submit">저장</button>
+    </div>
+
+    <textarea class="form-control" name="remark" rows="3"
+      placeholder="예: 패키지 변경 / 리오더 예정 / 촬영 필요 사항 등">{{ product['remark'] or '' }}</textarea>
   </form>
 </div>
 
