@@ -1,58 +1,117 @@
 /* =========================
-   다크 테마 가독성 보정
+   Dark Luxury Theme
+   Black + Red Line + Gold & White
 ========================= */
 
-/* 기본 텍스트 */
+/* =========================
+   기본 텍스트
+========================= */
 body,
 .table,
 .card,
 .form-control,
 .form-select {
-  color: #eaeaea;
+  color: #f2f2f2; /* 기본은 흰색 계열 */
+  background-color: #0d0d0d;
 }
 
-/* 테이블 헤더 */
+/* =========================
+   헤더 (검정 + 빨간 라인)
+========================= */
+header,
+.navbar,
+.card-header,
+.table thead {
+  background-color: #000000;
+  border-bottom: 2px solid #b11212; /* 빨간 포인트 라인 */
+}
+
+/* =========================
+   테이블 헤더
+========================= */
 .table thead th {
-  color: #ffffff;
+  color: #f5d77a; /* 골드 */
   font-weight: 600;
-  border-color: #333;
+  border-color: #2a2a2a;
 }
 
-/* 테이블 바디 */
+/* =========================
+   테이블 바디
+========================= */
 .table tbody td {
-  color: #e0e0e0;
-  border-color: #333;
+  color: #ffffff; /* 본문은 흰색 → 가독성 최우선 */
+  border-color: #2a2a2a;
 }
 
-/* muted 텍스트 (기존 회색 → 밝은 회색) */
+/* =========================
+   강조 텍스트 (금색)
+========================= */
+.text-gold {
+  color: #e6c76a;
+  font-weight: 600;
+}
+
+/* =========================
+   muted 텍스트 (은은한 골드)
+========================= */
 .text-muted,
 .small.text-muted {
-  color: #b5b5b5 !important;
+  color: #c7b56a !important;
 }
 
-/* 링크(상품코드 등) */
+/* =========================
+   링크 (금색 → hover 시 밝은 골드)
+========================= */
 a,
 .table a {
-  color: #5da9ff;
+  color: #e6c76a;
+  text-decoration: none;
 }
 
 a:hover {
-  color: #8bc1ff;
+  color: #ffe8a3;
 }
 
-/* 검색창 placeholder */
-.form-control::placeholder {
-  color: #9a9a9a;
-}
-
-/* 셀렉트 박스 */
+/* =========================
+   입력창 / 셀렉트
+========================= */
+.form-control,
 .form-select {
   background-color: #111;
-  color: #eaeaea;
-  border-color: #333;
+  color: #ffffff;
+  border: 1px solid #333;
 }
 
-/* 테이블 hover */
+.form-control::placeholder {
+  color: #9e9e9e;
+}
+
+/* =========================
+   테이블 hover
+========================= */
 .table-hover tbody tr:hover {
-  background-color: #1c1c1c;
+  background-color: #161616;
+}
+
+/* =========================
+   카드
+========================= */
+.card {
+  background-color: #0f0f0f;
+  border: 1px solid #2a2a2a;
+}
+
+/* =========================
+   버튼 (골드 포인트)
+========================= */
+.btn-gold {
+  background-color: #e6c76a;
+  color: #000;
+  border: none;
+  font-weight: 600;
+}
+
+.btn-gold:hover {
+  background-color: #ffe8a3;
+  color: #000;
 }
