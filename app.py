@@ -2,6 +2,8 @@ import os
 import re
 import sqlite3
 import argparse
+import secrets
+import json
 from datetime import datetime
 from pathlib import Path
 from functools import wraps
@@ -85,6 +87,9 @@ DB_PATH = DATA_DIR / "products.db"
 
 MASTER_XLSX_PATH = DATA_DIR / "master.xlsx"
 
+# ✅ 마스터 업로드 임시 저장 폴더 (세션 쿠키에 데이터 못 넣으므로 서버에 저장)
+TMP_MASTER_DIR = DATA_DIR / "tmp_master_upload"
+
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
 
 # ✅ 상품 사진 저장(저화질)
@@ -106,6 +111,7 @@ app.config.update(
 )
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+TMP_MASTER_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # =========================
@@ -199,6 +205,7 @@ def normalize_code(s: str) -> str:
 
 def ensure_dirs():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    TMP_MASTER_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _fix_exif_orientation(img: Image.Image) -> Image.Image:
@@ -372,16 +379,27 @@ def load_master_excel():
         raise FileNotFoundError(f"마스터 파일이 없습니다: {MASTER_XLSX_PATH}")
 
     df = _read_master_df_from_xlsx(MASTER_XLSX_PATH)
+    _apply_master_upsert(df)
+
+
+def _apply_master_upsert(df: pd.DataFrame) -> int:
+    """
+    df: 컬럼 ITEM_CODE/ITEM_NAME/SCAN_CODE (+ optional REMARK)
+    """
+    has_remark = "REMARK" in df.columns
 
     conn = get_db()
     cur = conn.cursor()
 
-    has_remark = "REMARK" in df.columns
+    upserted = 0
     for _, row in df.iterrows():
-        item_code = normalize_code(row["ITEM_CODE"])
-        item_name = normalize_code(row["ITEM_NAME"])
-        scan_code = normalize_code(row["SCAN_CODE"])
-        remark = normalize_code(row["REMARK"]) if has_remark else ""
+        item_code = normalize_code(row.get("ITEM_CODE", ""))
+        item_name = normalize_code(row.get("ITEM_NAME", ""))
+        scan_code = normalize_code(row.get("SCAN_CODE", ""))
+        remark = normalize_code(row.get("REMARK", "")) if has_remark else ""
+
+        if not item_code:
+            continue
 
         if has_remark:
             cur.execute(
@@ -408,8 +426,76 @@ def load_master_excel():
                 (item_code, item_name, scan_code)
             )
 
+        upserted += 1
+
     conn.commit()
     conn.close()
+    return upserted
+
+
+def _validate_master_df(df: pd.DataFrame):
+    """
+    업로드된 마스터 엑셀 검증 + 미리보기 생성
+    """
+    df.columns = df.columns.astype(str).str.strip()
+
+    required = ["ITEM_CODE", "ITEM_NAME", "SCAN_CODE"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"필수 컬럼 누락: {missing} / 현재 컬럼: {list(df.columns)}")
+
+    has_remark = "REMARK" in df.columns
+    cols = required + (["REMARK"] if has_remark else [])
+    df = df[cols].copy()
+
+    for col in cols:
+        df[col] = df[col].fillna("").astype(str).str.strip()
+
+    # ITEM_CODE 빈값 제거
+    df = df[df["ITEM_CODE"] != ""].copy()
+    if len(df) == 0:
+        raise ValueError("유효한 ITEM_CODE 행이 0건입니다.")
+
+    # ITEM_CODE 중복 체크
+    dup_mask = df["ITEM_CODE"].duplicated(keep=False)
+    dup_codes = sorted(set(df.loc[dup_mask, "ITEM_CODE"].tolist()))
+
+    warnings = []
+    if dup_codes:
+        warnings.append(f"ITEM_CODE 중복 {len(dup_codes)}건 (샘플): {dup_codes[:20]}{'...' if len(dup_codes) > 20 else ''}")
+
+    preview = df.head(30).to_dict(orient="records")
+
+    meta = {
+        "rows": int(len(df)),
+        "has_remark": bool(has_remark),
+        "columns": cols,
+        "dup_count": int(len(dup_codes)),
+        "dup_codes_sample": dup_codes[:50],
+        "warnings": warnings,
+    }
+    return df, meta, preview
+
+
+def _tmp_master_path(token: str) -> Path:
+    return TMP_MASTER_DIR / f"{token}.json"
+
+
+def _clear_pending_master_upload():
+    """
+    세션에 남아있는 pending 업로드 제거(파일 포함)
+    """
+    payload = session.get("pending_master_upload")
+    if payload and isinstance(payload, dict):
+        token = (payload.get("token") or "").strip()
+        if token:
+            p = _tmp_master_path(token)
+            try:
+                if p.exists():
+                    p.unlink()
+            except Exception:
+                pass
+    session.pop("pending_master_upload", None)
 
 
 # =========================
@@ -448,7 +534,7 @@ def api_presign_photos():
 
 
 # =========================
-# ✅ 마스터 엑셀 업로드로 업데이트
+# ✅ 마스터 엑셀 업로드: 검증 → 미리보기 → 확정반영
 # =========================
 @app.route("/admin/master_upload", methods=["GET", "POST"])
 @require_edit_auth
@@ -465,70 +551,94 @@ def admin_master_upload():
             return redirect(url_for("admin_master_upload"))
 
         try:
-            df = pd.read_excel(f)
-            df.columns = df.columns.astype(str).str.strip()
+            df_raw = pd.read_excel(f)
+            df, meta, preview = _validate_master_df(df_raw)
 
-            required = ["ITEM_CODE", "ITEM_NAME", "SCAN_CODE"]
-            missing = [c for c in required if c not in df.columns]
-            if missing:
-                flash(f"필수 컬럼 누락: {missing} / 현재 컬럼: {list(df.columns)}", "danger")
-                return redirect(url_for("admin_master_upload"))
+            # ✅ 이전 pending 업로드 정리
+            _clear_pending_master_upload()
 
-            has_remark = "REMARK" in df.columns
-            cols = required + (["REMARK"] if has_remark else [])
-            df = df[cols].copy()
+            # ✅ 서버 디스크에 임시 저장(세션 쿠키에 넣으면 터지므로)
+            token = secrets.token_urlsafe(16)
+            path = _tmp_master_path(token)
 
-            for col in cols:
-                df[col] = df[col].fillna("").astype(str).str.strip()
+            records = df.to_dict(orient="records")
+            payload = {
+                "records": records,
+                "saved_at": datetime.now().isoformat(timespec="seconds"),
+                "uploaded_name": f.filename,
+                "meta": meta,
+            }
+            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
-            df = df[df["ITEM_CODE"] != ""]
+            # ✅ 세션에는 토큰만 저장
+            session["pending_master_upload"] = {
+                "token": token,
+                "uploaded_name": f.filename,
+            }
 
-            conn = get_db()
-            cur = conn.cursor()
-
-            upserted = 0
-            for _, row in df.iterrows():
-                item_code = normalize_code(row["ITEM_CODE"])
-                item_name = normalize_code(row["ITEM_NAME"])
-                scan_code = normalize_code(row["SCAN_CODE"])
-                remark = normalize_code(row["REMARK"]) if has_remark else ""
-
-                if has_remark:
-                    cur.execute(
-                        """
-                        INSERT INTO products (item_code, item_name, scan_code, remark)
-                        VALUES (?, ?, ?, ?)
-                        ON CONFLICT(item_code) DO UPDATE SET
-                          item_name=excluded.item_name,
-                          scan_code=excluded.scan_code,
-                          remark=excluded.remark
-                        """,
-                        (item_code, item_name, scan_code, remark)
-                    )
-                else:
-                    cur.execute(
-                        """
-                        INSERT INTO products (item_code, item_name, scan_code)
-                        VALUES (?, ?, ?)
-                        ON CONFLICT(item_code) DO UPDATE SET
-                          item_name=excluded.item_name,
-                          scan_code=excluded.scan_code
-                        """,
-                        (item_code, item_name, scan_code)
-                    )
-                upserted += 1
-
-            conn.commit()
-            conn.close()
-
-            flash(f"마스터 업데이트 완료: {upserted}건 반영", "success")
-            return redirect(url_for("register_home"))
+            return render_template(
+                "admin_master_preview.html",
+                meta=meta,
+                preview=preview,
+                uploaded_name=f.filename
+            )
 
         except Exception as e:
             flash(f"업로드/검증 실패: {e}", "danger")
             return redirect(url_for("admin_master_upload"))
 
+    # GET: 혼선 방지 위해 pending 제거
+    _clear_pending_master_upload()
     return render_template("admin_master_upload.html")
+
+
+@app.post("/admin/master_upload/confirm")
+@require_edit_auth
+def admin_master_upload_confirm():
+    action = (request.form.get("_action", "") or "").strip()
+
+    payload = session.get("pending_master_upload") or {}
+    token = (payload.get("token") or "").strip()
+    if not token:
+        flash("검증된 업로드 데이터가 없습니다. 다시 업로드해 주세요.", "warning")
+        return redirect(url_for("admin_master_upload"))
+
+    path = _tmp_master_path(token)
+    if not path.exists():
+        session.pop("pending_master_upload", None)
+        flash("업로드 임시 데이터가 만료/삭제되었습니다. 다시 업로드해 주세요.", "warning")
+        return redirect(url_for("admin_master_upload"))
+
+    # 취소
+    if action == "cancel":
+        try:
+            path.unlink()
+        except Exception:
+            pass
+        session.pop("pending_master_upload", None)
+        flash("마스터 업데이트를 취소했습니다.", "info")
+        return redirect(url_for("register_home"))
+
+    # 확정 반영
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        records = raw.get("records", [])
+        df = pd.DataFrame(records)
+
+        upserted = _apply_master_upsert(df)
+
+        try:
+            path.unlink()
+        except Exception:
+            pass
+        session.pop("pending_master_upload", None)
+
+        flash(f"마스터 업데이트 완료: {upserted}건 반영", "success")
+        return redirect(url_for("register_home"))
+
+    except Exception as e:
+        flash(f"마스터 반영 실패: {e}", "danger")
+        return redirect(url_for("admin_master_upload"))
 
 
 # =========================
@@ -585,7 +695,6 @@ def view_products():
     elif f == "none":
         sql += " HAVING COUNT(ph.id) = 0 "
 
-    # ✅ 등록(사진 있는) 상품이 항상 위로
     sql += " ORDER BY photo_count DESC, p.item_code ASC LIMIT 2000 "
 
     cur.execute(sql, params)
