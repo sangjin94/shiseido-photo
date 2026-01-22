@@ -4,7 +4,7 @@ import sqlite3
 import argparse
 import secrets
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from functools import wraps
 
@@ -20,7 +20,6 @@ import boto3
 from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 
-# ✅ 프록시(nginx) 뒤에서 scheme/host 인식 안정화용
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
@@ -34,27 +33,18 @@ AWS_REGION = os.environ.get("AWS_REGION", "").strip()
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "").strip()
 AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip()
 
-# Presigned 유효시간(초)
 PRESIGNED_EXPIRES = int(os.environ.get("PRESIGNED_EXPIRES", "1800"))
 PRESIGNED_REFRESH_MARGIN = int(os.environ.get("PRESIGNED_REFRESH_MARGIN", "120"))
 
-# 서버 배포 시 Secret Key는 반드시 env로 주입 권장
 FLASK_SECRET_KEY = os.environ.get("FLASK_SECRET_KEY", "change-this-to-a-random-secret")
+AUTO_LOAD_MASTER = os.environ.get("AUTO_LOAD_MASTER", "1").strip()
 
-# 마스터 엑셀 자동 로드 여부
-AUTO_LOAD_MASTER = os.environ.get("AUTO_LOAD_MASTER", "1").strip()  # "1" or "0"
-
-# ✅ 업로드 용량 제한(바이트) - 기본 20MB
 MAX_CONTENT_LENGTH = int(os.environ.get("MAX_CONTENT_LENGTH", str(20 * 1024 * 1024)))
 
-# ✅ 모드별 암호키(필수)
-VIEW_PASSWORD = os.environ.get("VIEW_PASSWORD", "").strip()   # 조회용
-EDIT_PASSWORD = os.environ.get("EDIT_PASSWORD", "").strip()   # 등록용
+VIEW_PASSWORD = os.environ.get("VIEW_PASSWORD", "").strip()
+EDIT_PASSWORD = os.environ.get("EDIT_PASSWORD", "").strip()
 
-# ✅ 배포/로컬 디버그 전환
 FLASK_DEBUG = os.environ.get("FLASK_DEBUG", "0").strip() == "1"
-
-# ✅ 배포 환경 쿠키 보안 옵션 (https면 1 권장)
 COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "1").strip() == "1"
 
 if not all([S3_BUCKET, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]):
@@ -83,10 +73,9 @@ s3 = boto3.client(
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "products.db"
-
 MASTER_XLSX_PATH = DATA_DIR / "master.xlsx"
 
-# ✅ 마스터 업로드 임시 저장 폴더 (세션 쿠키에 큰 데이터 못 넣으므로)
+# ✅ 마스터 업로드 임시 저장 폴더
 TMP_MASTER_DIR = DATA_DIR / "tmp_master_upload"
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
@@ -99,10 +88,8 @@ app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 
-# ✅ 프록시(nginx) 뒤에서 url_for/redirect 스킴(http/https) 꼬임 방지
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
-# ✅ 세션/쿠키 보안(배포 안정화)
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
@@ -119,7 +106,6 @@ TMP_MASTER_DIR.mkdir(parents=True, exist_ok=True)
 def require_view_auth(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        # 등록(auth_edit)면 조회도 허용
         if session.get("auth_view") is True or session.get("auth_edit") is True:
             return fn(*args, **kwargs)
         return redirect(url_for("auth_view", next=request.path))
@@ -147,7 +133,7 @@ def auth_view():
         pw = (request.form.get("password", "") or "").strip()
         if pw == VIEW_PASSWORD:
             session["auth_view"] = True
-            session.pop("auth_edit", None)  # 조회만
+            session.pop("auth_edit", None)
             return redirect(next_url)
         flash("조회용 암호키가 올바르지 않습니다.", "danger")
     return render_template("auth.html", mode="view", title="조회용 화면", next_url=next_url)
@@ -160,7 +146,7 @@ def auth_edit():
         pw = (request.form.get("password", "") or "").strip()
         if pw == EDIT_PASSWORD:
             session["auth_edit"] = True
-            session["auth_view"] = True  # 등록이면 조회도 허용
+            session["auth_view"] = True
             return redirect(next_url)
         flash("등록용 암호키가 올바르지 않습니다.", "danger")
     return render_template("auth.html", mode="edit", title="등록용 화면", next_url=next_url)
@@ -174,7 +160,6 @@ def logout():
     return redirect(url_for("gate_index"))
 
 
-# ✅ 헬스체크 (로드밸런서/모니터링/배포 확인용)
 @app.get("/healthz")
 def healthz():
     return jsonify({"ok": True, "ts": datetime.now().isoformat(timespec="seconds")})
@@ -189,17 +174,17 @@ def get_db():
     return conn
 
 
+def normalize_code(s: str) -> str:
+    if s is None:
+        return ""
+    return str(s).strip()
+
+
 def allowed_file(filename: str) -> bool:
     if not filename or "." not in filename:
         return False
     ext = filename.rsplit(".", 1)[-1].lower()
     return ext in ALLOWED_EXTENSIONS
-
-
-def normalize_code(s: str) -> str:
-    if s is None:
-        return ""
-    return str(s).strip()
 
 
 def ensure_dirs():
@@ -208,7 +193,6 @@ def ensure_dirs():
 
 
 def _fix_exif_orientation(img: Image.Image) -> Image.Image:
-    """iPhone EXIF 방향 보정"""
     try:
         exif = getattr(img, "_getexif", None)
         if not exif:
@@ -229,10 +213,6 @@ def _fix_exif_orientation(img: Image.Image) -> Image.Image:
 
 
 def save_low_quality_jpeg_to_bytes(file_storage) -> bytes:
-    """
-    상품 사진 저장은 저화질 JPG로 변환(용량 절감)
-    로컬 저장 대신 bytes로 만들어 S3에 올린다.
-    """
     img = Image.open(file_storage.stream)
     img = _fix_exif_orientation(img)
 
@@ -248,19 +228,17 @@ def save_low_quality_jpeg_to_bytes(file_storage) -> bytes:
 
 
 def next_photo_filename(cur, item_code: str) -> str:
-    """상품코드_001.jpg 방식"""
     cur.execute("SELECT filename FROM photos WHERE product_item_code = ?", (item_code,))
     rows = cur.fetchall()
 
     pattern = re.compile(rf"^{re.escape(item_code)}_(\d+)\.jpg$", re.IGNORECASE)
     max_n = 0
     for r in rows:
-        fn = r["filename"]
+        fn = r["filename"] or ""
         m = pattern.match(fn)
         if m:
             try:
-                n = int(m.group(1))
-                max_n = max(max_n, n)
+                max_n = max(max_n, int(m.group(1)))
             except Exception:
                 pass
 
@@ -268,9 +246,8 @@ def next_photo_filename(cur, item_code: str) -> str:
 
 
 def s3_key_for(item_code: str, filename: str) -> str:
-    """S3 오브젝트 키: products/<item_code>/<filename>"""
     item_code = normalize_code(item_code)
-    filename = filename.strip().replace("\\", "_").replace("/", "_")
+    filename = (filename or "").strip().replace("\\", "_").replace("/", "_")
     return f"products/{item_code}/{filename}"
 
 
@@ -287,7 +264,7 @@ def s3_put_bytes(key: str, data: bytes, content_type: str = "image/jpeg"):
 
 
 def s3_delete(key: str):
-    """✅ 사진 삭제 버튼에서만 사용 (S3 원본 삭제)"""
+    # ✅ 사진 삭제 버튼에서만 S3 원본 삭제
     try:
         s3.delete_object(Bucket=S3_BUCKET, Key=key)
     except ClientError:
@@ -330,9 +307,16 @@ def init_db():
         """
     )
 
-    # ✅ 비고(remark) 컬럼 마이그레이션
+    # ✅ remark 컬럼
     if not _has_column(conn, "products", "remark"):
         cur.execute("ALTER TABLE products ADD COLUMN remark TEXT")
+
+    # ✅ is_active 컬럼 (마스터에서 제외된 상품은 0으로 숨김)
+    if not _has_column(conn, "products", "is_active"):
+        cur.execute("ALTER TABLE products ADD COLUMN is_active INTEGER DEFAULT 1")
+
+    # 기존 데이터 null이면 1로 보정
+    cur.execute("UPDATE products SET is_active=1 WHERE is_active IS NULL")
 
     cur.execute(
         """
@@ -352,31 +336,9 @@ def init_db():
 
 
 # =========================
-# 마스터 적재/검증
+# 마스터 검증/임시 저장
 # =========================
-def _read_master_df_from_xlsx(path: str) -> pd.DataFrame:
-    df = pd.read_excel(path)
-    df.columns = df.columns.astype(str).str.strip()
-
-    required = ["ITEM_CODE", "ITEM_NAME", "SCAN_CODE"]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        raise ValueError(f"마스터 엑셀에 필수 컬럼이 없습니다: {missing}\n현재 컬럼: {list(df.columns)}")
-
-    cols = required + (["REMARK"] if "REMARK" in df.columns else [])
-    df = df[cols].copy()
-
-    for col in cols:
-        df[col] = df[col].fillna("").astype(str).str.strip()
-
-    df = df[df["ITEM_CODE"] != ""]
-    return df
-
-
 def _validate_master_df(df: pd.DataFrame):
-    """
-    업로드된 마스터 엑셀 검증 + 미리보기 생성
-    """
     df.columns = df.columns.astype(str).str.strip()
 
     required = ["ITEM_CODE", "ITEM_NAME", "SCAN_CODE"]
@@ -432,22 +394,14 @@ def _clear_pending_master_upload():
     session.pop("pending_master_upload", None)
 
 
-def load_master_excel():
-    if not Path(MASTER_XLSX_PATH).exists():
-        raise FileNotFoundError(f"마스터 파일이 없습니다: {MASTER_XLSX_PATH}")
-    df = _read_master_df_from_xlsx(MASTER_XLSX_PATH)
-    _apply_master_replace_db_only(df)
-
-
 # =========================
-# ✅ 마스터 동기화(갈아엎기): DB 리스트만 정리, S3 원본은 유지
+# ✅ 마스터 동기화: 삭제 대신 is_active 처리
 # =========================
-def _apply_master_replace_db_only(df: pd.DataFrame) -> dict:
+def _apply_master_sync_is_active(df: pd.DataFrame) -> dict:
     """
-    엑셀 기준으로 products를 완전 동기화(갈아엎기).
-    - 엑셀에 있는 상품: INSERT/UPDATE
-    - 엑셀에 없는 상품: products/photos 레코드 삭제 (✅ S3 원본은 삭제하지 않음)
-    반환: {"upserted": int, "deleted_products": int, "deleted_photos": int}
+    엑셀 기준 동기화:
+    - 엑셀에 있는 상품: upsert + is_active=1
+    - 엑셀에 없는 상품: is_active=0 (삭제 ❌, photos 삭제 ❌, S3 삭제 ❌)
     """
     df.columns = df.columns.astype(str).str.strip()
     has_remark = "REMARK" in df.columns
@@ -463,30 +417,21 @@ def _apply_master_replace_db_only(df: pd.DataFrame) -> dict:
     conn = get_db()
     cur = conn.cursor()
 
+    # 1) 전체 상품 중 마스터에 없는 건 비활성화
     rows = cur.execute("SELECT item_code FROM products").fetchall()
     existing_codes = set([r[0] for r in rows if r and r[0]])
-    delete_codes = sorted(existing_codes - keep_codes)
+    to_deactivate = sorted(existing_codes - keep_codes)
 
-    deleted_photos = 0
-    deleted_products = 0
-
-    if delete_codes:
+    deactivated = 0
+    if to_deactivate:
         CHUNK = 800
-        for i in range(0, len(delete_codes), CHUNK):
-            chunk = delete_codes[i:i + CHUNK]
+        for i in range(0, len(to_deactivate), CHUNK):
+            chunk = to_deactivate[i:i + CHUNK]
             q = ",".join(["?"] * len(chunk))
+            cur.execute(f"UPDATE products SET is_active=0 WHERE item_code IN ({q})", chunk)
+            deactivated += len(chunk)
 
-            cnt = cur.execute(
-                f"SELECT COUNT(*) FROM photos WHERE product_item_code IN ({q})",
-                chunk
-            ).fetchone()[0]
-            deleted_photos += int(cnt or 0)
-
-            # ✅ DB 레코드만 제거 (S3는 유지)
-            cur.execute(f"DELETE FROM photos WHERE product_item_code IN ({q})", chunk)
-            cur.execute(f"DELETE FROM products WHERE item_code IN ({q})", chunk)
-            deleted_products += len(chunk)
-
+    # 2) 마스터에 있는 건 upsert + 활성화
     upserted = 0
     for _, row in df.iterrows():
         item_code = normalize_code(row["ITEM_CODE"])
@@ -497,41 +442,110 @@ def _apply_master_replace_db_only(df: pd.DataFrame) -> dict:
         if has_remark:
             cur.execute(
                 """
-                INSERT INTO products (item_code, item_name, scan_code, remark)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO products (item_code, item_name, scan_code, remark, is_active)
+                VALUES (?, ?, ?, ?, 1)
                 ON CONFLICT(item_code) DO UPDATE SET
                   item_name=excluded.item_name,
                   scan_code=excluded.scan_code,
-                  remark=excluded.remark
+                  remark=excluded.remark,
+                  is_active=1
                 """,
                 (item_code, item_name, scan_code, remark)
             )
         else:
             cur.execute(
                 """
-                INSERT INTO products (item_code, item_name, scan_code)
-                VALUES (?, ?, ?)
+                INSERT INTO products (item_code, item_name, scan_code, is_active)
+                VALUES (?, ?, ?, 1)
                 ON CONFLICT(item_code) DO UPDATE SET
                   item_name=excluded.item_name,
-                  scan_code=excluded.scan_code
+                  scan_code=excluded.scan_code,
+                  is_active=1
                 """,
                 (item_code, item_name, scan_code)
             )
-
         upserted += 1
 
     conn.commit()
     conn.close()
 
-    return {
-        "upserted": upserted,
-        "deleted_products": deleted_products,
-        "deleted_photos": deleted_photos,
-    }
+    return {"upserted": upserted, "deactivated": deactivated}
 
 
 # =========================
-# ✅ Presigned URL 새로고침 API (자동 갱신용)
+# ✅ S3 스캔 → photos 테이블 복구 (S3 원본 유지)
+# =========================
+def rebuild_photos_from_s3(prefix: str = "products/") -> dict:
+    """
+    S3의 products/<item_code>/<filename> 를 스캔하여
+    photos 테이블에 누락된 레코드를 채운다.
+    - 기존 s3_key가 있으면 중복 삽입 안 함
+    - products에 해당 item_code가 없어도(비활성 포함) photos는 기록 가능(외래키 강제 안 켬)
+    """
+    conn = get_db()
+    cur = conn.cursor()
+
+    # 기존 s3_key 목록
+    existing = set()
+    for r in cur.execute("SELECT s3_key FROM photos WHERE s3_key IS NOT NULL AND s3_key <> ''").fetchall():
+        existing.add(r[0])
+
+    paginator = s3.get_paginator("list_objects_v2")
+
+    inserted = 0
+    scanned = 0
+
+    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            key = obj.get("Key") or ""
+            if not key.startswith(prefix):
+                continue
+            # products/<item_code>/<filename>
+            parts = key.split("/", 2)
+            if len(parts) != 3:
+                continue
+            _, item_code, filename = parts
+            item_code = (item_code or "").strip()
+            filename = (filename or "").strip()
+            if not item_code or not filename:
+                continue
+
+            # 이미지 확장자만
+            ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+            if ext not in {"jpg", "jpeg", "png", "webp", "gif"}:
+                continue
+
+            scanned += 1
+
+            if key in existing:
+                continue
+
+            lm = obj.get("LastModified")
+            if lm and hasattr(lm, "astimezone"):
+                # S3 LastModified는 tz-aware
+                ts = lm.astimezone(timezone.utc).isoformat(timespec="seconds")
+            else:
+                ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+            cur.execute(
+                "INSERT INTO photos (product_item_code, filename, uploaded_at, s3_key) VALUES (?, ?, ?, ?)",
+                (item_code, filename, ts, key)
+            )
+            existing.add(key)
+            inserted += 1
+
+            # 너무 큰 트랜잭션 방지(1000개마다 커밋)
+            if inserted % 1000 == 0:
+                conn.commit()
+
+    conn.commit()
+    conn.close()
+
+    return {"scanned": scanned, "inserted": inserted}
+
+
+# =========================
+# ✅ Presigned URL 새로고침 API
 # =========================
 @app.get("/api/presign/photos")
 @require_view_auth
@@ -552,10 +566,7 @@ def api_presign_photos():
     out = []
     for r in rows:
         key = r["s3_key"] or s3_key_for(item_code, r["filename"])
-        out.append({
-            "id": r["id"],
-            "url": presigned_get_url(key, expires_sec=PRESIGNED_EXPIRES),
-        })
+        out.append({"id": r["id"], "url": presigned_get_url(key, expires_sec=PRESIGNED_EXPIRES)})
 
     return jsonify({
         "ok": True,
@@ -566,7 +577,7 @@ def api_presign_photos():
 
 
 # =========================
-# ✅ 마스터 업로드: 검증 → 미리보기 → 확정반영(갈아엎기)
+# ✅ 마스터 업로드: 검증 → 미리보기 → 확정반영(is_active 동기화)
 # =========================
 @app.route("/admin/master_upload", methods=["GET", "POST"])
 @require_edit_auth
@@ -586,10 +597,8 @@ def admin_master_upload():
             df_raw = pd.read_excel(f)
             df, meta, preview = _validate_master_df(df_raw)
 
-            # ✅ 이전 pending 업로드 정리
             _clear_pending_master_upload()
 
-            # ✅ 임시 저장(서버 디스크)
             token = secrets.token_urlsafe(16)
             path = _tmp_master_path(token)
 
@@ -601,24 +610,14 @@ def admin_master_upload():
             }
             path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
-            # ✅ 세션에는 토큰만
-            session["pending_master_upload"] = {
-                "token": token,
-                "uploaded_name": f.filename,
-            }
+            session["pending_master_upload"] = {"token": token, "uploaded_name": f.filename}
 
-            return render_template(
-                "admin_master_preview.html",
-                meta=meta,
-                preview=preview,
-                uploaded_name=f.filename
-            )
+            return render_template("admin_master_preview.html", meta=meta, preview=preview, uploaded_name=f.filename)
 
         except Exception as e:
             flash(f"업로드/검증 실패: {e}", "danger")
             return redirect(url_for("admin_master_upload"))
 
-    # GET
     _clear_pending_master_upload()
     return render_template("admin_master_upload.html")
 
@@ -640,7 +639,6 @@ def admin_master_upload_confirm():
         flash("업로드 임시 데이터가 만료/삭제되었습니다. 다시 업로드해 주세요.", "warning")
         return redirect(url_for("admin_master_upload"))
 
-    # 취소
     if action == "cancel":
         try:
             path.unlink()
@@ -650,13 +648,12 @@ def admin_master_upload_confirm():
         flash("마스터 업데이트를 취소했습니다.", "info")
         return redirect(url_for("register_home"))
 
-    # 확정 반영 (✅ DB 리스트만 갈아엎기, S3 원본 유지)
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
         records = raw.get("records", [])
         df = pd.DataFrame(records)
 
-        result = _apply_master_replace_db_only(df)
+        result = _apply_master_sync_is_active(df)
 
         try:
             path.unlink()
@@ -665,9 +662,7 @@ def admin_master_upload_confirm():
         session.pop("pending_master_upload", None)
 
         flash(
-            f"마스터 동기화 완료: 반영 {result['upserted']}건 / "
-            f"목록 제거 상품 {result['deleted_products']}건 / "
-            f"리스트에서 제거된 사진 {result['deleted_photos']}건 (S3 원본 유지)",
+            f"마스터 동기화 완료: 반영 {result['upserted']}건 / 비활성화 {result['deactivated']}건 (사진/S3 원본 유지)",
             "success"
         )
         return redirect(url_for("register_home"))
@@ -678,13 +673,13 @@ def admin_master_upload_confirm():
 
 
 # =========================
-# ✅ 조회용: 전체 상품 리스트 + 필터 + 썸네일 + 엑셀
+# ✅ 조회용: is_active=1만 표시
 # =========================
 @app.route("/view/products", methods=["GET"])
 @require_view_auth
 def view_products():
     q = normalize_code(request.args.get("q", ""))
-    f = (request.args.get("f", "all") or "all").strip().lower()  # all/has/none
+    f = (request.args.get("f", "all") or "all").strip().lower()
 
     conn = get_db()
     cur = conn.cursor()
@@ -712,7 +707,7 @@ def view_products():
           ON ph.product_item_code = p.item_code
     """
 
-    where = []
+    where = ["IFNULL(p.is_active,1) = 1"]
     params = []
 
     if q:
@@ -720,10 +715,7 @@ def view_products():
         where.append("(p.item_code LIKE ? OR p.scan_code LIKE ? OR p.item_name LIKE ? OR p.remark LIKE ?)")
         params.extend([like, like, like, like])
 
-    sql = base_sql
-    if where:
-        sql += " WHERE " + " AND ".join(where)
-
+    sql = base_sql + " WHERE " + " AND ".join(where)
     sql += " GROUP BY p.item_code, p.item_name, p.scan_code, p.remark "
 
     if f == "has":
@@ -759,7 +751,10 @@ def view_product_detail(item_code):
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("SELECT item_code, item_name, scan_code, remark FROM products WHERE item_code=?", (item_code,))
+    cur.execute(
+        "SELECT item_code, item_name, scan_code, remark FROM products WHERE item_code=? AND IFNULL(is_active,1)=1",
+        (item_code,)
+    )
     product = cur.fetchone()
     if not product:
         conn.close()
@@ -811,6 +806,7 @@ def view_export_products_xlsx():
         FROM products p
         LEFT JOIN photos ph
           ON ph.product_item_code = p.item_code
+        WHERE IFNULL(p.is_active,1)=1
     """
 
     where = []
@@ -823,7 +819,7 @@ def view_export_products_xlsx():
 
     sql = base_sql
     if where:
-        sql += " WHERE " + " AND ".join(where)
+        sql += " AND " + " AND ".join(where)
 
     sql += " GROUP BY p.item_name, p.item_code, p.scan_code, p.remark "
 
@@ -858,7 +854,7 @@ def view_export_products_xlsx():
 
 
 # =========================
-# ✅ 등록용 화면: 상품 검색/상세/업로드/삭제
+# ✅ 등록용: is_active=1만 표시
 # =========================
 @app.route("/register", methods=["GET"])
 @require_edit_auth
@@ -878,6 +874,7 @@ def register_home():
         FROM products p
         LEFT JOIN photos ph
           ON ph.product_item_code = p.item_code
+        WHERE IFNULL(p.is_active,1)=1
     """
 
     where = []
@@ -890,7 +887,7 @@ def register_home():
 
     sql = base_sql
     if where:
-        sql += " WHERE " + " AND ".join(where)
+        sql += " AND " + " AND ".join(where)
 
     sql += """
         GROUP BY p.item_code, p.item_name, p.scan_code, p.remark
@@ -914,16 +911,18 @@ def register_product_detail(item_code):
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("SELECT item_code, item_name, scan_code, remark FROM products WHERE item_code = ?", (item_code,))
+    cur.execute(
+        "SELECT item_code, item_name, scan_code, remark FROM products WHERE item_code = ? AND IFNULL(is_active,1)=1",
+        (item_code,)
+    )
     product = cur.fetchone()
     if not product:
         conn.close()
-        flash("해당 상품을 찾을 수 없습니다. (마스터에 없는 상품코드)", "warning")
+        flash("해당 상품을 찾을 수 없습니다. (마스터에 없거나 비활성화된 상품)", "warning")
         return redirect(url_for("register_home"))
 
     action = (request.form.get("_action", "") or "").strip()
 
-    # ✅ 비고 저장
     if request.method == "POST" and action == "save_remark":
         remark = (request.form.get("remark", "") or "").strip()
         cur.execute("UPDATE products SET remark=? WHERE item_code=?", (remark, item_code))
@@ -932,7 +931,6 @@ def register_product_detail(item_code):
         flash("비고 저장 완료", "success")
         return redirect(url_for("register_product_detail", item_code=item_code))
 
-    # ✅ 사진 업로드
     if request.method == "POST" and action in ("", "upload_photos"):
         if "photos" not in request.files:
             flash("업로드할 파일이 없습니다. (폼 enctype='multipart/form-data' 확인)", "danger")
@@ -979,7 +977,10 @@ def register_product_detail(item_code):
         return redirect(url_for("register_product_detail", item_code=item_code))
 
     # GET
-    cur.execute("SELECT item_code, item_name, scan_code, remark FROM products WHERE item_code = ?", (item_code,))
+    cur.execute(
+        "SELECT item_code, item_name, scan_code, remark FROM products WHERE item_code = ? AND IFNULL(is_active,1)=1",
+        (item_code,)
+    )
     product = cur.fetchone()
 
     cur.execute(
@@ -987,6 +988,7 @@ def register_product_detail(item_code):
         (item_code,)
     )
     photos_rows = cur.fetchall()
+    conn.close()
 
     photos = []
     for r in photos_rows:
@@ -997,8 +999,6 @@ def register_product_detail(item_code):
             "uploaded_at": r["uploaded_at"],
             "url": presigned_get_url(key, expires_sec=PRESIGNED_EXPIRES),
         })
-
-    conn.close()
 
     return render_template(
         "product_detail.html",
@@ -1026,12 +1026,11 @@ def register_delete_photo(photo_id: int):
     filename = row["filename"]
     key = row["s3_key"] or s3_key_for(item_code, filename)
 
-    # ✅ DB에서 사진 삭제
     cur.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
     conn.commit()
     conn.close()
 
-    # ✅ 버튼 삭제는 S3 원본도 삭제 (요구사항)
+    # ✅ 버튼 삭제는 S3 삭제
     s3_delete(key)
 
     flash("사진 삭제 완료", "success")
@@ -1045,28 +1044,25 @@ def bootstrap():
     ensure_dirs()
     init_db()
 
-    if AUTO_LOAD_MASTER == "1":
-        try:
-            load_master_excel()
-            print("[OK] Master loaded:", MASTER_XLSX_PATH)
-        except Exception as e:
-            print("[WARN] Master load skipped:", e)
-
 
 bootstrap()
 
 
 def main_cli():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", nargs="?", default="run", choices=["run", "load_master"])
+    parser.add_argument(
+        "command",
+        nargs="?",
+        default="run",
+        choices=["run", "rebuild_photos_from_s3"]
+    )
     args = parser.parse_args()
 
-    if args.command == "load_master":
-        load_master_excel()
-        print("[OK] master loaded.")
+    if args.command == "rebuild_photos_from_s3":
+        result = rebuild_photos_from_s3(prefix="products/")
+        print(f"[OK] S3 scan done. scanned={result['scanned']} inserted={result['inserted']}")
         return
 
-    # ✅ 배포에서는 gunicorn이 실행하므로 여기 run은 로컬 개발용으로만
     app.run(
         host="0.0.0.0",
         port=int(os.environ.get("PORT", "5000")),
