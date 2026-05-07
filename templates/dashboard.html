@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>SHISEIDO 상품 관리 시스템 구축 현황</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg:       #1a1a1a;
+    --surface:  #232323;
+    --card:     #2b2b2b;
+    --border:   #3a3a3a;
+    --red:      #e8192c;
+    --red-dim:  rgba(232,25,44,0.15);
+    --red-glow: rgba(232,25,44,0.35);
+    --gold:     #c9a84c;
+    --text:     #f0f0f0;
+    --muted:    #888;
+    --grid:     #333;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Noto Sans KR', sans-serif;
+    min-height: 100vh;
+    padding: 0 0 60px;
+  }
+  header {
+    background: #111;
+    border-bottom: 3px solid var(--red);
+    padding: 22px 40px 18px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    position: sticky; top: 0; z-index: 100;
+  }
+  header .logo { font-family: 'Bebas Neue', sans-serif; font-size: 28px; letter-spacing: 6px; color: #fff; }
+  header .logo span { color: var(--red); }
+  header .sub { font-size: 13px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; border-left: 2px solid var(--border); padding-left: 20px; margin-left: 4px; }
+  header .ts { margin-left: auto; font-size: 12px; color: var(--muted); }
+  .page { max-width: 1200px; margin: 0 auto; padding: 36px 24px 0; }
+  .kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 32px; }
+  .kpi { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 28px 28px 22px; position: relative; overflow: hidden; transition: transform .2s, box-shadow .2s; }
+  .kpi:hover { transform: translateY(-3px); box-shadow: 0 8px 32px rgba(0,0,0,.4); }
+  .kpi::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--red); }
+  .kpi.highlight::before { background: var(--gold); }
+  .kpi-label { font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
+  .kpi-value { font-family: 'Bebas Neue', sans-serif; font-size: 52px; line-height: 1; color: #fff; letter-spacing: 1px; }
+  .kpi-value .unit { font-size: 24px; color: var(--muted); margin-left: 4px; }
+  .kpi-sub { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .kpi.highlight .kpi-value { color: var(--gold); }
+  .gauge-wrap { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 28px; margin-bottom: 32px; }
+  .gauge-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .gauge-title { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); }
+  .gauge-pct { font-family: 'Bebas Neue', sans-serif; font-size: 28px; color: var(--gold); letter-spacing: 2px; }
+  .bar-bg { background: var(--border); border-radius: 4px; height: 14px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 4px; background: linear-gradient(90deg, var(--red) 0%, var(--gold) 100%); transition: width 1.2s cubic-bezier(.4,0,.2,1); width: 0; }
+  .bar-marks { display: flex; justify-content: space-between; margin-top: 6px; font-size: 10px; color: var(--muted); }
+  .tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+  .tab-btn { background: var(--surface); border: 1px solid var(--border); border-radius: 6px 6px 0 0; color: var(--muted); cursor: pointer; font-family: 'Noto Sans KR', sans-serif; font-size: 12px; letter-spacing: 1px; padding: 8px 20px; transition: all .15s; }
+  .tab-btn.active { background: var(--card); border-bottom-color: var(--card); color: var(--text); border-top: 2px solid var(--red); }
+  .chart-card { background: var(--card); border: 1px solid var(--border); border-radius: 0 10px 10px 10px; padding: 28px; margin-bottom: 32px; }
+  .chart-wrap { position: relative; height: 320px; }
+  .table-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 32px; }
+  .table-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 24px; border-bottom: 1px solid var(--border); }
+  .table-head h3 { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); }
+  .table-scroll { max-height: 400px; overflow-y: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  thead th { background: #1e1e1e; color: var(--muted); font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; padding: 12px 16px; text-align: right; position: sticky; top: 0; }
+  thead th:first-child { text-align: left; }
+  tbody tr { border-bottom: 1px solid var(--border); transition: background .12s; }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: rgba(255,255,255,.03); }
+  tbody td { padding: 11px 16px; font-size: 13px; text-align: right; color: var(--text); }
+  tbody td:first-child { text-align: left; color: var(--muted); font-size: 12px; }
+  .rate-cell { font-weight: 500; color: var(--gold) !important; }
+  .latest-row td { color: #fff !important; font-weight: 700; }
+  .latest-row td:first-child { color: var(--red) !important; }
+  .table-scroll::-webkit-scrollbar { width: 4px; }
+  .table-scroll::-webkit-scrollbar-track { background: transparent; }
+  .table-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  footer { text-align: center; font-size: 11px; color: var(--muted); padding-top: 20px; letter-spacing: 1px; }
+  @media (max-width: 700px) {
+    .kpi-grid { grid-template-columns: 1fr 1fr; }
+    header { padding: 16px 20px; }
+    header .sub { display: none; }
+    .page { padding: 20px 16px 0; }
+    .chart-wrap { height: 220px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">SHISEIDO<span>.</span></div>
+  <div class="sub">상품 관리 시스템 구축 현황</div>
+  <div class="ts" id="ts"></div>
+</header>
+<div class="page">
+  <div class="kpi-grid">
+    <div class="kpi">
+      <div class="kpi-label">총 마스터 SKU</div>
+      <div class="kpi-value">{{ "{:,}".format(total_sku) }}<span class="unit">개</span></div>
+      <div class="kpi-sub">현재 활성화된 전체 상품 수</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">사진 등록 SKU</div>
+      <div class="kpi-value">{{ "{:,}".format(registered_sku) }}<span class="unit">개</span></div>
+      <div class="kpi-sub">1장 이상 사진 등록 완료</div>
+    </div>
+    <div class="kpi highlight">
+      <div class="kpi-label">구축률</div>
+      <div class="kpi-value">{{ rate }}<span class="unit">%</span></div>
+      <div class="kpi-sub">등록 SKU / 총 SKU</div>
+    </div>
+  </div>
+  <div class="gauge-wrap">
+    <div class="gauge-header">
+      <span class="gauge-title">전체 구축 진행률</span>
+      <span class="gauge-pct">{{ rate }}%</span>
+    </div>
+    <div class="bar-bg">
+      <div class="bar-fill" id="barFill" data-rate="{{ rate }}"></div>
+    </div>
+    <div class="bar-marks"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
+  </div>
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('weekly', this)">주차별 누적</button>
+    <button class="tab-btn" onclick="switchTab('daily', this)">일별 누적</button>
+  </div>
+  <div class="chart-card">
+    <div class="chart-wrap"><canvas id="mainChart"></canvas></div>
+  </div>
+  <div class="table-card">
+    <div class="table-head"><h3 id="tableTitle">주차별 구축 현황</h3></div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>기간</th><th>신규 등록</th><th>누적 SKU</th><th>총 SKU</th><th>구축률</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<footer>SHISEIDO KOREA — PHOTO MANAGEMENT SYSTEM &nbsp;|&nbsp; 데이터 기준: 실시간 DB</footer>
+<script>
+const WEEKLY = {{ weekly_series | tojson }};
+const DAILY  = {{ daily_series  | tojson }};
+const TOTAL  = {{ total_sku }};
+let currentChart = null;
+Chart.defaults.color = '#888';
+Chart.defaults.font.family = "'Noto Sans KR', sans-serif";
+function buildChart(data, mode) {
+  if (currentChart) currentChart.destroy();
+  const labels = data.map(d => mode === 'weekly' ? d.label : d.date);
+  const rates  = data.map(d => d.rate);
+  const counts = data.map(d => d.cumulative);
+  const ctx = document.getElementById('mainChart').getContext('2d');
+  const grad = ctx.createLinearGradient(0, 0, 0, 320);
+  grad.addColorStop(0, 'rgba(232,25,44,0.35)');
+  grad.addColorStop(1, 'rgba(232,25,44,0.00)');
+  currentChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: '구축률 (%)', data: rates, yAxisID: 'yRate', borderColor: '#e8192c', backgroundColor: grad, borderWidth: 2.5, pointBackgroundColor: '#e8192c', pointBorderColor: '#1a1a1a', pointBorderWidth: 2, pointRadius: 5, pointHoverRadius: 7, tension: 0.3, fill: true, order: 1 },
+        { label: '누적 SKU', data: counts, yAxisID: 'yCount', borderColor: '#c9a84c', backgroundColor: 'transparent', borderWidth: 1.5, borderDash: [5,4], pointRadius: 0, pointHoverRadius: 5, tension: 0.3, fill: false, order: 2 }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'top', align: 'end', labels: { boxWidth: 14, padding: 20, font: { size: 11 } } },
+        tooltip: {
+          backgroundColor: '#1e1e1e', borderColor: '#3a3a3a', borderWidth: 1, titleColor: '#ccc', bodyColor: '#eee',
+          callbacks: { label: ctx => ctx.dataset.yAxisID === 'yRate' ? ` 구축률: ${ctx.parsed.y}%` : ` 누적 SKU: ${ctx.parsed.y.toLocaleString()}개` }
+        }
+      },
+      scales: {
+        x: { grid: { color: '#2e2e2e' }, ticks: { maxRotation: 45, font: { size: 10 } } },
+        yRate: { position: 'left', min: 0, max: 100, grid: { color: '#2e2e2e' }, ticks: { callback: v => v + '%', stepSize: 10, font: { size: 10 } } },
+        yCount: { position: 'right', min: 0, grid: { drawOnChartArea: false }, ticks: { callback: v => v.toLocaleString(), font: { size: 10 } } }
+      }
+    }
+  });
+}
+function buildTable(data, mode) {
+  document.getElementById('tableTitle').textContent = mode === 'weekly' ? '주차별 구축 현황' : '일별 구축 현황';
+  const rows = [...data].reverse();
+  document.getElementById('tableBody').innerHTML = rows.map((d, i) => {
+    const label = mode === 'weekly' ? d.label : d.date;
+    return `<tr class="${i===0?'latest-row':''}"><td>${label}</td><td>${d.count.toLocaleString()}</td><td>${d.cumulative.toLocaleString()}</td><td>${TOTAL.toLocaleString()}</td><td class="rate-cell">${d.rate}%</td></tr>`;
+  }).join('');
+}
+function switchTab(mode, btn) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const data = mode === 'weekly' ? WEEKLY : DAILY;
+  buildChart(data, mode); buildTable(data, mode);
+}
+window.addEventListener('DOMContentLoaded', () => {
+  const bar = document.getElementById('barFill');
+  requestAnimationFrame(() => { bar.style.width = (parseFloat(bar.dataset.rate)||0) + '%'; });
+  const now = new Date();
+  document.getElementById('ts').textContent = now.toLocaleDateString('ko-KR') + ' ' + now.toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}) + ' 기준';
+  buildChart(WEEKLY.length ? WEEKLY : DAILY, WEEKLY.length ? 'weekly' : 'daily');
+  buildTable(WEEKLY.length ? WEEKLY : DAILY, WEEKLY.length ? 'weekly' : 'daily');
+});
+</script>
+</body>
+</html>

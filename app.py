@@ -165,6 +165,85 @@ def healthz():
     return jsonify({"ok": True, "ts": datetime.now().isoformat(timespec="seconds")})
 
 
+@app.route("/dashboard", methods=["GET"])
+def dashboard():
+    from collections import defaultdict, OrderedDict
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    total_sku = cur.execute(
+        "SELECT COUNT(*) FROM products WHERE IFNULL(is_active,1)=1"
+    ).fetchone()[0]
+
+    registered_sku = cur.execute(
+        """
+        SELECT COUNT(DISTINCT ph.product_item_code)
+        FROM photos ph
+        JOIN products p ON p.item_code = ph.product_item_code
+        WHERE IFNULL(p.is_active,1)=1
+        """
+    ).fetchone()[0]
+
+    daily_rows = cur.execute(
+        """
+        SELECT
+            DATE(MIN(ph.uploaded_at)) AS reg_date,
+            ph.product_item_code
+        FROM photos ph
+        JOIN products p ON p.item_code = ph.product_item_code
+        WHERE IFNULL(p.is_active,1)=1
+        GROUP BY ph.product_item_code
+        ORDER BY reg_date ASC
+        """
+    ).fetchall()
+    conn.close()
+
+    daily_count = defaultdict(int)
+    for r in daily_rows:
+        daily_count[r[0]] += 1
+
+    sorted_dates = sorted(daily_count.keys())
+    cumulative = 0
+    daily_series = []
+    for d in sorted_dates:
+        cumulative += daily_count[d]
+        rate = round(cumulative / total_sku * 100, 2) if total_sku else 0
+        daily_series.append({
+            "date": d,
+            "count": daily_count[d],
+            "cumulative": cumulative,
+            "rate": rate,
+        })
+
+    def week_label(date_str: str) -> str:
+        from datetime import date
+        d = date.fromisoformat(date_str)
+        first_day = date(d.year, d.month, 1)
+        week_of_month = (d.day + first_day.weekday()) // 7 + 1
+        return f"{d.month}월 {week_of_month}주차"
+
+    weekly_map = OrderedDict()
+    for item in daily_series:
+        wk = week_label(item["date"])
+        if wk not in weekly_map:
+            weekly_map[wk] = {"label": wk, "count": 0, "cumulative": 0, "rate": 0.0}
+        weekly_map[wk]["count"] += item["count"]
+        weekly_map[wk]["cumulative"] = item["cumulative"]
+        weekly_map[wk]["rate"] = item["rate"]
+
+    weekly_series = list(weekly_map.values())
+
+    return render_template(
+        "dashboard.html",
+        total_sku=total_sku,
+        registered_sku=registered_sku,
+        rate=round(registered_sku / total_sku * 100, 2) if total_sku else 0,
+        daily_series=daily_series,
+        weekly_series=weekly_series,
+    )
+
+
 # =========================
 # 유틸
 # =========================
